@@ -1,0 +1,8 @@
+{
+  "name": "IdeaFlow 3.0 - Sovereign Neural Knowledge OS",
+  "description": "A context-aware knowledge operating system that stores all data in your private Google Drive, featuring deep thinking AI and voice-first flow.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone"
+  ]
+}

@@ -1,8 +1,9 @@
 import React, { useState } from 'react';
 import { useProjects } from '../../contexts/ProjectContext';
 import { ProjectSettingsModal } from './ProjectSettingsModal';
+import { BranchSettingsModal } from './BranchSettingsModal';
 import { CreateBranchModal } from './CreateBranchModal';
-import { Project } from '../../types';
+import { Project, Branch } from '../../types';
 
 interface ProjectSidebarProps {
   onNewProject: () => void;
@@ -10,9 +11,28 @@ interface ProjectSidebarProps {
 }
 
 export const ProjectSidebar: React.FC<ProjectSidebarProps> = ({ onNewProject, onOpenSettings }) => {
-  const { projects, activeProject, selectProject, branches, activeBranch, selectBranch, createBranch } = useProjects();
+  const { projects, activeProject, selectProject, branches, activeBranch, selectBranch, createBranch, saveBranch } = useProjects();
   const [settingsProject, setSettingsProject] = useState<Project | null>(null);
+  const [settingsBranch, setSettingsBranch] = useState<Branch | null>(null);
   const [isBranchModalOpen, setIsBranchModalOpen] = useState(false);
+  const [savingBranchId, setSavingBranchId] = useState<string | null>(null);
+  const [savedBranchId, setSavedBranchId] = useState<string | null>(null);
+
+  const handleQuickSave = async (e: React.MouseEvent, branch: Branch) => {
+    e.stopPropagation();
+    if (savingBranchId) return;
+    
+    setSavingBranchId(branch.id);
+    try {
+      await saveBranch(branch.messages);
+      setSavedBranchId(branch.id);
+      setTimeout(() => setSavedBranchId(null), 2000);
+    } catch (err) {
+      console.error("Quick save failed:", err);
+    } finally {
+      setSavingBranchId(null);
+    }
+  };
 
   return (
     <div className="flex flex-col h-full w-80 bg-white dark:bg-zinc-950">
@@ -21,6 +41,14 @@ export const ProjectSidebar: React.FC<ProjectSidebarProps> = ({ onNewProject, on
           isOpen={!!settingsProject} 
           onClose={() => setSettingsProject(null)} 
           project={settingsProject} 
+        />
+      )}
+
+      {settingsBranch && (
+        <BranchSettingsModal
+          isOpen={!!settingsBranch}
+          onClose={() => setSettingsBranch(null)}
+          branch={settingsBranch}
         />
       )}
 
@@ -113,19 +141,49 @@ export const ProjectSidebar: React.FC<ProjectSidebarProps> = ({ onNewProject, on
                 <p className="px-3 text-[11px] text-zinc-400 italic">No threads active.</p>
               ) : (
                 branches.map(branch => (
-                  <button 
-                    key={branch.id}
-                    onClick={() => selectBranch(branch.id)}
-                    className={`w-full flex items-center gap-3 px-4 py-3 text-xs font-medium rounded-2xl transition-all ${activeBranch?.id === branch.id ? 'bg-zinc-100 dark:bg-white/5 text-slate-900 dark:text-white shadow-inner border border-zinc-200 dark:border-white/5' : 'text-zinc-500 hover:text-slate-700 dark:hover:text-zinc-300 hover:bg-zinc-50 dark:hover:bg-zinc-900/30'}`}
-                  >
-                    <svg className={`w-4 h-4 ${activeBranch?.id === branch.id ? 'text-indigo-600 dark:text-indigo-400' : 'text-zinc-300 dark:text-zinc-800'}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 8h10M7 12h4m1 8l-4-4H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-3l-4 4z" />
-                    </svg>
-                    <span className="truncate">{branch.name}</span>
-                    {branch.isVirtual && (
-                      <div className="ml-auto w-1.5 h-1.5 bg-amber-500 rounded-full animate-pulse shadow-sm shadow-amber-500/50"></div>
-                    )}
-                  </button>
+                  <div key={branch.id} className="group relative">
+                    <button 
+                      onClick={() => selectBranch(branch.id)}
+                      className={`w-full flex items-center gap-3 px-4 py-3 text-xs font-medium rounded-2xl transition-all pr-12 ${activeBranch?.id === branch.id ? 'bg-zinc-100 dark:bg-white/5 text-slate-900 dark:text-white shadow-inner border border-zinc-200 dark:border-white/5' : 'text-zinc-500 hover:text-slate-700 dark:hover:text-zinc-300 hover:bg-zinc-50 dark:hover:bg-zinc-900/30 border border-transparent'}`}
+                    >
+                      <svg className={`w-4 h-4 ${activeBranch?.id === branch.id ? 'text-indigo-600 dark:text-indigo-400' : 'text-zinc-300 dark:text-zinc-800'}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 8h10M7 12h4m1 8l-4-4H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-3l-4 4z" />
+                      </svg>
+                      <span className="truncate">{branch.name}</span>
+                      {branch.isVirtual && (
+                        <div className="ml-auto w-1.5 h-1.5 bg-amber-500 rounded-full animate-pulse shadow-sm shadow-amber-500/50"></div>
+                      )}
+                    </button>
+                    
+                    <div className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center opacity-0 group-hover:opacity-100 transition-all z-10">
+                      <button
+                        onClick={(e) => handleQuickSave(e, branch)}
+                        className={`p-1.5 transition-all rounded-lg ${savedBranchId === branch.id ? 'text-green-500' : 'text-zinc-400 hover:text-indigo-600 dark:hover:text-indigo-400 hover:bg-white dark:hover:bg-zinc-800'} ${savingBranchId === branch.id ? 'animate-spin' : ''}`}
+                        title="Sync to Vault"
+                      >
+                        {savedBranchId === branch.id ? (
+                          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
+                          </svg>
+                        ) : (
+                          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-3m-1 4l-3 3m0 0l-3-3m3 3V4" />
+                          </svg>
+                        )}
+                      </button>
+
+                      <button
+                        onClick={(e) => { e.stopPropagation(); setSettingsBranch(branch); }}
+                        className="p-1.5 text-zinc-400 hover:text-indigo-600 dark:hover:text-indigo-400 rounded-lg hover:bg-white dark:hover:bg-zinc-800 transition-all"
+                        title="Thread Config"
+                      >
+                        <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924-1.756-3.35 0a1.724 1.724 0 00-2.573-1.066-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                        </svg>
+                      </button>
+                    </div>
+                  </div>
                 ))
               )}
             </div>

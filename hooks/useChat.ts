@@ -1,59 +1,53 @@
-
 import { useState, useCallback, useEffect, useRef } from 'react';
 import { Message, DriveItem } from '../types';
-import { GeminiService } from '../lib/ai/gemini';
+import { GeminiService, GenerationOptions } from '../lib/ai/gemini';
 import { executeDriveTool } from '../lib/ai/tools';
 import { useProjects } from '../contexts/ProjectContext';
 import { DriveService } from '../lib/drive/driveService';
+import { MediaGenerationService } from '../lib/ai/mediaGenerationService';
 import { Content, Part } from '@google/genai';
+import * as geminiLive from '../lib/ai/geminiLive';
+import { checkNeuralAccess } from '../lib/config';
 
 /**
- * useChat Hook: The "Co-Reasoning" orchestrator.
- * Manages conversation state and autonomous Drive interaction loop.
+ * useChat Hook: The "Co-Reasoning" orchestrator for IdeaFlow 3.0.
  */
 export const useChat = () => {
-  const { activeProject, activeBranch, saveBranch, updateLocalMessages } = useProjects();
+  const { activeProject, activeBranch, saveBranch, updateLocalMessages, selectBranch } = useProjects();
   const [isLoading, setIsLoading] = useState(false);
+  const [isVoiceLinking, setIsVoiceLinking] = useState(false);
+  const [isAiSpeaking, setIsAiSpeaking] = useState(false);
+  const [isGeneratingVideo, setIsGeneratingVideo] = useState(false);
   const [toolStatus, setToolStatus] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [isAuthBroken, setIsAuthBroken] = useState(false);
   const [filesInContext, setFilesInContext] = useState<DriveItem[]>([]);
   
-  const lastSavedCountRef = useRef(0);
+  const geminiService = useRef(new GeminiService()).current;
 
-  /**
-   * Neural Handshake: Reset hook state when active project changes.
-   */
+  const activeProjectRef = useRef(activeProject);
+  const activeBranchRef = useRef(activeBranch);
+
+  useEffect(() => {
+    activeProjectRef.current = activeProject;
+  }, [activeProject]);
+
+  useEffect(() => {
+    activeBranchRef.current = activeBranch;
+  }, [activeBranch]);
+
+  useEffect(() => {
+    return () => {
+      geminiLive.disconnect();
+    };
+  }, []);
+
+  const clearError = useCallback(() => setError(null), []);
+
   useEffect(() => {
     if (!activeProject) return;
-    
-    setIsLoading(true);
-    setFilesInContext([]);
-    lastSavedCountRef.current = 0;
-
-    const performHandshake = async () => {
-      try {
-        await fetchContextFiles();
-      } finally {
-        setIsLoading(false);
-      }
-    };
-
-    performHandshake();
+    fetchContextFiles();
   }, [activeProject?.id]);
-
-  // Auto-Save Loop: Persist to Drive every 5 messages
-  useEffect(() => {
-    if (!activeBranch || activeBranch.isVirtual || !activeBranch.isDirty) return;
-    
-    // Defensive check for messages existence
-    const messages = activeBranch.messages || [];
-    const messageCount = messages.length;
-    
-    if (messageCount > 0 && messageCount % 5 === 0 && messageCount !== lastSavedCountRef.current) {
-      console.log(`Auto-saving neural thread: ${activeBranch.name} at ${messageCount} messages.`);
-      saveBranch(messages);
-      lastSavedCountRef.current = messageCount;
-    }
-  }, [activeBranch, saveBranch]);
 
   const fetchContextFiles = useCallback(async () => {
     if (activeProject?.id) {
@@ -62,199 +56,269 @@ export const useChat = () => {
         const targetFolder = activeProject.config.attachedFolderId || activeProject.driveFolderId;
         const files = await driveService.listContents(targetFolder);
         setFilesInContext(files);
-      } catch (err) {
-        console.error("Failed to fetch file context for AI:", err);
+      } catch (err: any) { 
+        if (err.message === 'AUTH_DEAD') setIsAuthBroken(true);
+        console.error("Context fetch failed:", err); 
       }
-    } else {
-      setFilesInContext([]);
     }
-  }, [activeProject?.id, activeProject?.config.attachedFolderId, activeProject?.driveFolderId]);
+  }, [activeProject]);
 
-  const injectMessages = useCallback(async (newMessages: Message[]) => {
-    if (!activeBranch) return;
-    const currentMessages = Array.isArray(activeBranch.messages) ? activeBranch.messages : [];
-    const updatedMessages = [...currentMessages, ...newMessages];
-    updateLocalMessages(updatedMessages);
-  }, [activeBranch, updateLocalMessages]);
-
-  const sendMessage = useCallback(async (text: string, attachment?: Message['attachment']) => {
-    if (!activeProject || !activeBranch || (!text.trim() && !attachment)) return;
-
-    setIsLoading(true);
+  const startVoiceLink = useCallback(async () => {
+    const project = activeProjectRef.current;
+    const branch = activeBranchRef.current;
     
-    if (text.includes('[NEURAL_ATTACHMENT:')) {
-      await fetchContextFiles();
+    if (!project || !branch || isVoiceLinking) return;
+    
+    const hasKey = await checkNeuralAccess();
+    if (!hasKey && window.aistudio) {
+      await window.aistudio.openSelectKey();
+      const stillNoKey = !(await checkNeuralAccess());
+      if (stillNoKey) {
+        setError("Sovereign Key required for real-time neural handshake.");
+        return;
+      }
     }
+
+    setIsVoiceLinking(true);
+    setError(null);
+
+    const systemInstruction = `
+      IDENTITY: ${project.name} Real-time Neural Link.
+      ROLE: ${project.config.role}.
+      PROTOCOL: Be concise, conversational, and direct.
+      EXTRA_CONTEXT: ${project.config.systemInstruction || ''}
+    `;
+
+    try {
+      await geminiLive.connect(
+        systemInstruction,
+        branch.messages || [],
+        (speaking) => setIsAiSpeaking(speaking),
+        (userFinal, aiFinal) => {
+          const now = Date.now();
+          const finalMessages: Message[] = [];
+          if (userFinal) finalMessages.push({ id: `vf-u-${now}`, role: 'user', content: userFinal, timestamp: now, type: 'discussion' });
+          if (aiFinal) finalMessages.push({ id: `vf-a-${now}`, role: 'assistant', content: aiFinal, timestamp: now + 1, type: 'idea' });
+          
+          updateLocalMessages(prev => {
+            const existing = prev.filter(m => !m.id.startsWith('v-live-'));
+            return [...existing, ...finalMessages];
+          });
+        },
+        (userText) => {
+          updateLocalMessages(prev => {
+            const existing = [...prev].filter(m => m.id !== 'v-live-user');
+            return [...existing, { id: 'v-live-user', role: 'user', content: userText, timestamp: Date.now(), type: 'discussion' }];
+          });
+        },
+        (aiText) => {
+          updateLocalMessages(prev => {
+            const existing = [...prev].filter(m => m.id !== 'v-live-ai');
+            return [...existing, { id: 'v-live-ai', role: 'assistant', content: aiText, timestamp: Date.now(), type: 'idea' }];
+          });
+        },
+        project.config.voice,
+        process.env.API_KEY
+      );
+    } catch (err: any) {
+      console.error("Voice Connection Failure:", err);
+      if (err.message === 'AUTH_DEAD') setIsAuthBroken(true);
+      setError(err.message || "Neural link disruption.");
+      setIsVoiceLinking(false);
+    }
+  }, [updateLocalMessages, isVoiceLinking]);
+
+  const stopVoiceLink = useCallback(async () => {
+    await geminiLive.disconnect();
+    setIsVoiceLinking(false);
+    setIsAiSpeaking(false);
+    
+    updateLocalMessages(prev => {
+      const filtered = prev.filter(m => !m.id.startsWith('v-live-'));
+      if (activeBranchRef.current) {
+         setToolStatus("Vault Sync...");
+         saveBranch(filtered).catch(e => {
+           if (e.message === 'AUTH_DEAD') setIsAuthBroken(true);
+         }).finally(() => setToolStatus(null));
+      }
+      return filtered;
+    });
+  }, [updateLocalMessages, saveBranch]);
+
+  /**
+   * deleteMessage: Removes a specific message from history and syncs with Drive.
+   */
+  const deleteMessage = useCallback(async (messageId: string) => {
+    if (!activeBranchRef.current) return;
+    
+    const currentMessages = activeBranchRef.current.messages || [];
+    const filteredMessages = currentMessages.filter(m => m.id !== messageId);
+    
+    // Optimistic local update
+    updateLocalMessages(filteredMessages);
+    
+    // Immediate background sync to Vault
+    try {
+      setToolStatus("Pruning Vault...");
+      await saveBranch(filteredMessages);
+    } catch (err: any) {
+      console.error("Vault Deletion Sync Failed:", err);
+      if (err.message === 'AUTH_DEAD') setIsAuthBroken(true);
+      setError("Failed to sync message removal to cloud vault.");
+    } finally {
+      setToolStatus(null);
+    }
+  }, [updateLocalMessages, saveBranch]);
+
+  /**
+   * sendMessage: Simplified signature for vision integration as requested.
+   * Signature: (content: string, attachment?: string | null)
+   */
+  const sendMessage = useCallback(async (
+    content: string, 
+    attachment?: string | null
+  ) => {
+    if (!activeProject || !activeBranch || (!content.trim() && !attachment)) return;
+    setError(null);
+    setIsLoading(true);
+    setToolStatus("Reasoning...");
     
     const userMessage: Message = {
       id: `u-${Date.now()}`,
       role: 'user',
-      content: text,
+      content: content.trim(),
       timestamp: Date.now(),
       type: 'discussion',
-      attachment
+      base64Attachment: attachment || undefined
     };
 
-    const currentMessages = Array.isArray(activeBranch.messages) ? activeBranch.messages : [];
-    let updatedMessages = [...currentMessages, userMessage];
+    updateLocalMessages(prev => [...prev, userMessage]);
     
-    // Lazy Authorization: If this is the first message of a virtual branch, save immediately to get a File ID.
-    if (activeBranch.isVirtual) {
-      await saveBranch(updatedMessages);
-      lastSavedCountRef.current = updatedMessages.length;
-    } else {
-      updateLocalMessages(updatedMessages);
-    }
-    
-    const gemini = new GeminiService();
-    const driveService = DriveService.getInstance();
-
     try {
-      const skills = activeProject.config.skills.join(', ') || 'General Intelligence';
-      const fileListStr = filesInContext.length > 0 
-        ? filesInContext.map(f => `- [${f.mimeType.includes('folder') ? 'DIR' : 'FILE'}] Name: ${f.name} | ID: ${f.id} | Type: ${f.mimeType}`).join('\n')
-        : 'The directory is currently empty.';
+      const systemPrompt = `IDENTITY: ${activeProject.name}. ROLE: ${activeProject.config.role}. ${activeProject.config.systemInstruction || ''}`;
+      let currentMessagesForAI = [...(activeBranchRef.current?.messages || []), userMessage];
+      let assistantText = "";
+      let loopCount = 0;
+      const MAX_LOOPS = 6; 
 
-      const systemPrompt = `
-        IDENTITY: You are ${activeProject.name}, a Sovereign Neural Intelligence interface.
-        CORE ROLE: ${activeProject.config.role}.
-        EXPERT DOMAINS: ${skills}.
-        WORKSPACE OBJECTIVE: ${activeProject.config.description || 'General collaboration and knowledge management.'}.
+      // Deep Think logic based on prompt keywords or state
+      const isDeepThink = content.toLowerCase().includes('search') || content.toLowerCase().includes('verify');
+      const options: GenerationOptions = {
+        isDeepThink,
+        modelId: activeProject.config.logicModelId,
+        reasoningBudget: activeProject.config.reasoningBudget,
+        onRetry: (m: string) => setToolStatus(m)
+      };
 
-        SITUATIONAL CONTEXT:
-        - Project Vault ID: ${activeProject.driveFolderId}
-        - Attached Resource Sector: ${activeProject.config.attachedFolderId}
-        - Current Thread: ${activeBranch.name}
+      while (loopCount < MAX_LOOPS) {
+        loopCount++;
+        let chatHistory = GeminiService.formatHistory(currentMessagesForAI.map(m => ({ 
+          role: m.role, 
+          content: m.content,
+          base64Attachment: m.base64Attachment
+        })));
         
-        [MOUNTED KNOWLEDGE GRAPH]
-        ${fileListStr}
+        const responseText = await geminiService.generateWithTools(chatHistory, systemPrompt, options);
         
-        OPERATIONAL PROTOCOLS:
-        1. SOVEREIGN STORAGE: You own this workspace. Use 'list_files' to map the sector if needed.
-        2. KNOWLEDGE PERSISTENCE: If a user asks to "save", "remember", or "draft" something, use 'create_file' or 'update_file'.
-        3. AGENTIC FEEDBACK: When you call a tool, I will log it in the UI. 
-        4. IMAGE ANALYSIS: Use 'read_image' for binary visual data.
-        5. THINKING: Always reason step-by-step using markdown before concluding.
-      `;
+        const toolCallRegex = /\[SYSTEM_TOOL_CALL: ({.*?})\]/g;
+        const matches = [...responseText.matchAll(toolCallRegex)];
 
-      let chatHistory: Content[] = GeminiService.formatHistory(
-        updatedMessages.map(m => ({ role: m.role, content: m.content }))
-      );
+        const cleanText = responseText.replace(toolCallRegex, '').trim();
+        if (cleanText) assistantText += (assistantText ? "\n\n" : "") + cleanText;
 
-      let response = await gemini.generateWithTools(chatHistory, systemPrompt);
-      let iterationCount = 0;
-      const MAX_ITERATIONS = 5;
+        if (matches.length === 0) break; 
 
-      while (iterationCount < MAX_ITERATIONS) {
-        iterationCount++;
-        
-        const responseText = response.text || "";
-        const toolMatch = responseText.match(/\{[\s\S]*"tool":[\s\S]*\}/);
+        let contextSwitched = false;
 
-        if (toolMatch) {
-          try {
-            const toolData = JSON.parse(toolMatch[0]);
-            let feedback = "";
-            setToolStatus(`⚡ OS ACTION: ${toolData.tool.toUpperCase()}`);
+        for (const match of matches) {
+          let toolCall;
+          try { toolCall = JSON.parse(match[1]); } catch (e) { continue; }
 
-            if (toolData.tool === 'create_file') {
-              const fileId = await driveService.createFile(
-                toolData.name, 
-                toolData.content, 
-                activeProject.config.attachedFolderId || activeProject.driveFolderId
-              );
-              feedback = `[SYSTEM: File created successfully. ID: ${fileId}]`;
-            } else if (toolData.tool === 'read_file') {
-              const content = await driveService.readFile(toolData.id);
-              feedback = `[SYSTEM: File Content: "${content}"]`;
-            } else if (toolData.tool === 'save_branch') {
-              await saveBranch(updatedMessages);
-              feedback = `[SYSTEM: Thread "${toolData.name}" persisted to Drive successfully.]`;
-            }
-
-            const sysMsg: Message = {
-              id: `sys-tool-${Date.now()}`,
-              role: 'system',
-              content: feedback,
-              timestamp: Date.now(),
-              type: 'system',
-            };
-            
-            updatedMessages = [...updatedMessages, sysMsg];
-            updateLocalMessages(updatedMessages);
-            await fetchContextFiles();
-
-            chatHistory = GeminiService.formatHistory(
-              updatedMessages.map(m => ({ role: m.role, content: m.content }))
-            );
-            response = await gemini.generateWithTools(chatHistory, systemPrompt);
-            continue;
-          } catch (err: any) {
-            console.error("Text Tool Error:", err);
-            break;
-          }
-        }
-
-        if (response.functionCalls && response.functionCalls.length > 0) {
-          chatHistory.push(response.candidates[0].content);
-          const toolResponses = [];
+          setToolStatus(`Vault Access...`);
           
-          for (const fc of response.functionCalls) {
-            const actionLabel = fc.name.toUpperCase().replace('_', ' ');
-            const targetName = fc.args.name || fc.args.fileId || '';
-            setToolStatus(`⚡ NEURAL ACTION: ${actionLabel} ${targetName}`);
+          try {
+            let result = await executeDriveTool(
+              toolCall.name, 
+              toolCall.args, 
+              activeProject.config.attachedFolderId || activeProject.driveFolderId
+            );
 
-            const processMsg: Message = {
-              id: `proc-${Date.now()}-${Math.random()}`,
-              role: 'system',
-              content: `⚡ AI AGENT: Executing ${fc.name}(${targetName})`,
-              timestamp: Date.now(),
-              type: 'process',
-            };
-            updatedMessages = [...updatedMessages, processMsg];
-            updateLocalMessages(updatedMessages);
-
-            try {
-              const result = await executeDriveTool(fc.name, fc.args, activeProject.config.attachedFolderId || activeProject.driveFolderId);
-              toolResponses.push({ id: fc.id, name: fc.name, response: { result } });
-            } catch (err: any) {
-              toolResponses.push({ id: fc.id, name: fc.name, response: { error: err.message || "Drive I/O failure." } });
+            if (result.status === 'delegated') {
+              if (result.type === 'image' || result.type === 'video') {
+                const isVideo = result.type === 'video';
+                if (isVideo) setIsGeneratingVideo(true);
+                
+                setToolStatus(isVideo ? "Producing video..." : "Synthesizing Image...");
+                
+                try {
+                  const mediaBlob = await MediaGenerationService.getInstance().generateMedia({
+                    type: result.type,
+                    prompt: result.prompt,
+                    referenceFileId: result.reference_file_id,
+                    imageModel: activeProject.config.imageModelId,
+                    videoModel: activeProject.config.videoModelId,
+                    onProgress: (status) => setToolStatus(status)
+                  });
+                  
+                  const fileName = `${result.type}_${Date.now()}.${result.type === 'video' ? 'mp4' : 'png'}`;
+                  const fileId = await DriveService.getInstance().uploadFile(mediaBlob, activeProject.config.attachedFolderId || activeProject.driveFolderId, fileName);
+                  
+                  const toolResponse = `[MEDIA_DISPLAY: {"id": "${fileId}", "type": "${mediaBlob.type}", "name": "${fileName}"}] Media synthesized.`;
+                  currentMessagesForAI.push({ role: 'assistant', content: `[SYSTEM_TOOL_RESULT: ${toolResponse}]` } as Message);
+                  assistantText += `\n\n${toolResponse}`;
+                } catch (mediaErr: any) {
+                  if (mediaErr.message === 'AUTH_DEAD') setIsAuthBroken(true);
+                  setError("Neural synthesis disruption.");
+                  currentMessagesForAI.push({ role: 'assistant', content: `[SYSTEM_TOOL_ERROR: Synthesis failed]` } as Message);
+                } finally {
+                  if (isVideo) setIsGeneratingVideo(false);
+                }
+              } else if (result.action === 'save_branch') {
+                setToolStatus("Syncing...");
+                await saveBranch(currentMessagesForAI as Message[], result.summary);
+                currentMessagesForAI.push({ role: 'assistant', content: `[SYSTEM_TOOL_RESULT: Thread persisted]` } as Message);
+              } else if (result.action === 'open_branch') {
+                setToolStatus(`Switching Context...`);
+                if (activeBranchRef.current?.isDirty && !activeBranchRef.current?.isVirtual) {
+                   await saveBranch(currentMessagesForAI as Message[]);
+                }
+                await selectBranch(result.id);
+                contextSwitched = true;
+                break;
+              }
+            } else {
+              const resultStr = JSON.stringify(result);
+              currentMessagesForAI.push({ role: 'assistant', content: `[SYSTEM_TOOL_CALL: ${JSON.stringify(toolCall)}]` } as Message);
+              currentMessagesForAI.push({ role: 'assistant', content: `[SYSTEM_TOOL_RESULT: ${resultStr}]` } as Message);
             }
+          } catch (toolErr: any) {
+            if (toolErr.message === 'AUTH_DEAD') setIsAuthBroken(true);
+            currentMessagesForAI.push({ role: 'assistant', content: `[SYSTEM_TOOL_ERROR: Execution failed]` } as Message);
           }
-
-          const toolParts: Part[] = toolResponses.map(tr => ({ functionResponse: tr }));
-          chatHistory.push({ role: 'user', parts: toolParts });
-          response = await gemini.generateWithTools(chatHistory, systemPrompt);
-        } else {
-          break;
         }
+        
+        if (contextSwitched) break; 
+        setToolStatus("Deep Reasoning...");
       }
 
-      const assistantMessage: Message = {
-        id: `a-${Date.now()}`,
-        role: 'assistant',
-        content: response.text || "Neural reasoning sequence concluded.",
-        timestamp: Date.now(),
-        type: 'idea', 
-      };
-
-      updatedMessages = [...updatedMessages, assistantMessage];
-      updateLocalMessages(updatedMessages);
-      await fetchContextFiles(); 
-    } catch (error: any) {
-      const errorMessage: Message = {
-        id: `sys-${Date.now()}`,
-        role: 'system',
-        content: `NEURAL LINK INTERRUPTED: ${error.message || 'Check connection.'}`,
-        timestamp: Date.now(),
-        type: 'system',
-      };
-      updateLocalMessages([...updatedMessages, errorMessage]);
+      if (assistantText.trim() || !activeBranchRef.current?.isVirtual) {
+        const assistantMessage: Message = {
+          id: `a-${Date.now()}`,
+          role: 'assistant',
+          content: assistantText.trim() || "Cycle complete.",
+          timestamp: Date.now(),
+          type: options.isDeepThink ? 'result' : 'idea',
+        };
+        updateLocalMessages(prev => [...prev, assistantMessage]);
+      }
+    } catch (err: any) {
+      if (err.message === 'AUTH_DEAD') setIsAuthBroken(true);
+      setError(err.message || "NEURAL_DISRUPTION");
     } finally {
       setIsLoading(false);
       setToolStatus(null);
     }
-  }, [activeProject, activeBranch, saveBranch, updateLocalMessages, filesInContext, fetchContextFiles]);
+  }, [activeProject, activeBranch, updateLocalMessages, geminiService, saveBranch, selectBranch]);
 
-  return { sendMessage, injectMessages, isLoading, toolStatus };
+  return { sendMessage, deleteMessage, startVoiceLink, stopVoiceLink, isVoiceLinking, isAiSpeaking, isGeneratingVideo, isLoading, toolStatus, error, clearError, isAuthBroken };
 };

@@ -1,12 +1,13 @@
 
 import { GoogleGenAI, LiveServerMessage, Modality, Blob } from '@google/genai';
+import { Message } from '../../types';
 
 /**
- * IdeaFlow 3.0 Live Logic
- * Adheres to @google/genai SDK guidelines for low-latency voice interaction.
+ * IdeaFlow 3.0 Live Logic: REFACTORED RESOURCE MANAGER
+ * Implements a strict Kill-Switch Protocol to prevent "Insufficient Resources" faults.
+ * Orchestrates low-latency multimodal link with atomic cleanup.
  */
 
-// Manual Base64 implementation as per SDK guidelines
 function decode(base64: string): Uint8Array {
   const binaryString = atob(base64);
   const len = binaryString.length;
@@ -26,7 +27,6 @@ function encode(bytes: Uint8Array): string {
   return btoa(binary);
 }
 
-// Manual raw PCM decoding as per SDK guidelines
 async function decodeAudioData(
   data: Uint8Array,
   ctx: AudioContext,
@@ -46,186 +46,235 @@ async function decodeAudioData(
   return buffer;
 }
 
-export interface SessionTranscript {
-  role: 'user' | 'model';
-  text: string;
-}
-
 export interface GeminiLiveConfig {
-  apiKey: string;
   model: string;
   voice: string;
   systemInstruction: string;
-  onOpen: () => void;
-  onModelSpeakingChange: (speaking: boolean) => void;
-  onMessage: (message: LiveServerMessage) => void;
-  onError: (err: any) => void;
-  onClose: () => void;
+  initialContext?: Message[];
+  apiKey?: string;
+  onOpen?: () => void;
+  onModelSpeakingChange?: (speaking: boolean) => void;
+  onUserText?: (text: string) => void;
+  onAiText?: (text: string) => void;
+  onTurnComplete?: (userText: string, aiText: string) => void;
+  onError?: (err: any) => void;
+  onClose?: () => void;
 }
 
-/**
- * GeminiLiveService: The Neural Voice Bridge.
- * Encapsulates the Live API session and hardware management.
- */
 export class GeminiLiveService {
   private config: GeminiLiveConfig;
-  private ai: GoogleGenAI;
   private sessionPromise: Promise<any> | null = null;
+  private session: any = null;
   private inputAudioContext: AudioContext | null = null;
   private outputAudioContext: AudioContext | null = null;
   private stream: MediaStream | null = null;
+  private processor: ScriptProcessorNode | null = null;
   private nextStartTime: number = 0;
   private sources: Set<AudioBufferSourceNode> = new Set();
-  private transcriptHistory: SessionTranscript[] = [];
+  
   private currentInputTranscription = '';
   private currentOutputTranscription = '';
-  private isActive: boolean = false;
+  private isActive = false;
+  private isConnecting = false;
 
   constructor(config: GeminiLiveConfig) {
     this.config = config;
-    // Always use process.env.API_KEY as per guidelines
-    this.ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
   }
 
-  /**
-   * Initializes audio contexts and connects to the Gemini Live API.
-   */
-  async connect(initialHistory: string = "") {
-    this.isActive = true;
+  private async cleanup() {
+    this.isActive = false;
+    this.isConnecting = false;
     
-    // Create contexts immediately
-    const AudioContextClass = (window as any).AudioContext || (window as any).webkitAudioContext;
-    this.inputAudioContext = new AudioContextClass({ sampleRate: 16000 });
-    this.outputAudioContext = new AudioContextClass({ sampleRate: 24000 });
-    
-    try {
-      this.stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      
-      // GUARD: Check if service was deactivated while waiting for mic permission
-      if (!this.isActive) {
-        this.cleanup();
-        return;
-      }
-    } catch (err) {
-      console.error("Microphone access denied", err);
-      this.isActive = false;
-      this.cleanup();
-      throw new Error("Microphone access is required for voice sessions.");
+    if (this.processor) {
+      try {
+        this.processor.onaudioprocess = null;
+        this.processor.disconnect();
+      } catch (e) {}
+      this.processor = null;
     }
 
-    this.sessionPromise = this.ai.live.connect({
-      model: this.config.model,
-      callbacks: {
-        onopen: () => {
-          // DEFENSIVE: Check for null contexts/streams before use to prevent race condition crash
-          if (!this.isActive || !this.inputAudioContext || !this.stream) {
-            console.warn("GeminiLive: Attempted to initialize source on inactive session.");
-            return;
-          }
+    if (this.session) {
+      try { 
+        this.session.close(); 
+      } catch (e) {}
+      this.session = null;
+    }
 
-          try {
-            const source = this.inputAudioContext.createMediaStreamSource(this.stream);
-            const scriptProcessor = this.inputAudioContext.createScriptProcessor(4096, 1, 1);
-            
-            scriptProcessor.onaudioprocess = (e) => {
-              if (!this.isActive || !this.sessionPromise) return;
+    this.stopAllAudio();
 
-              const inputData = e.inputBuffer.getChannelData(0);
-              const pcmBlob = this.createBlob(inputData);
-              
-              this.sessionPromise.then((session) => {
-                if (this.isActive && session) {
-                   session.sendRealtimeInput({ media: pcmBlob });
-                }
-              });
-            };
-            
-            source.connect(scriptProcessor);
-            scriptProcessor.connect(this.inputAudioContext.destination);
-            this.config.onOpen();
-          } catch (e) {
-            console.error("GeminiLive: Failed to setup audio processing nodes:", e);
-            this.config.onError(e);
-          }
-        },
-        onmessage: async (message: LiveServerMessage) => {
-          if (!this.isActive) return;
+    if (this.stream) {
+      this.stream.getTracks().forEach(t => {
+        try { t.stop(); } catch (e) {}
+      });
+      this.stream = null;
+    }
 
-          this.config.onMessage(message);
+    if (this.inputAudioContext) {
+      if (this.inputAudioContext.state !== 'closed') {
+        try { await this.inputAudioContext.close(); } catch (e) {}
+      }
+      this.inputAudioContext = null;
+    }
+    
+    if (this.outputAudioContext) {
+      if (this.outputAudioContext.state !== 'closed') {
+        try { await this.outputAudioContext.close(); } catch (e) {}
+      }
+      this.outputAudioContext = null;
+    }
 
-          // Track internal transcripts for session summary
-          if (message.serverContent?.outputTranscription) {
-            this.currentOutputTranscription += message.serverContent.outputTranscription.text;
-          } else if (message.serverContent?.inputTranscription) {
-            this.currentInputTranscription += message.serverContent.inputTranscription.text;
-          }
-          
-          if (message.serverContent?.turnComplete) {
-            if (this.currentInputTranscription.trim()) {
-              this.transcriptHistory.push({ role: 'user', text: this.currentInputTranscription.trim() });
+    this.sessionPromise = null;
+  }
+
+  public async connect() {
+    if (this.isConnecting || this.isActive) {
+      // Logic for overlap prevention
+      return;
+    }
+
+    this.isConnecting = true;
+    try {
+      await this.cleanup();
+      this.isActive = true;
+
+      const AudioContextClass = (window.AudioContext || (window as any).webkitAudioContext);
+      this.inputAudioContext = new AudioContextClass({ sampleRate: 16000 });
+      this.outputAudioContext = new AudioContextClass({ sampleRate: 24000 });
+
+      if (this.inputAudioContext.state === 'suspended') await this.inputAudioContext.resume();
+      if (this.outputAudioContext.state === 'suspended') await this.outputAudioContext.resume();
+
+      this.stream = await navigator.mediaDevices.getUserMedia({ 
+        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } 
+      });
+
+      const ai = new GoogleGenAI({ apiKey: this.config.apiKey || process.env.API_KEY });
+      
+      const historyText = (this.config.initialContext || []).slice(-10).map(m => 
+        `${m.role === 'user' ? 'USER' : 'OS'}: ${m.content}`
+      ).join('\n');
+
+      const fullInstruction = `
+${this.config.systemInstruction}
+
+[VAULT_CONTEXT_HISTORY]
+${historyText || "No previous history found for this thread."}
+[END_HISTORY]
+
+Protocol: Continue the flow from the last known state.
+      `;
+
+      this.sessionPromise = ai.live.connect({
+        model: this.config.model,
+        callbacks: {
+          onopen: () => {
+            if (!this.isActive || !this.inputAudioContext || !this.stream) {
+              this.cleanup();
+              return;
             }
-            if (this.currentOutputTranscription.trim()) {
-              this.transcriptHistory.push({ role: 'model', text: this.currentOutputTranscription.trim() });
-            }
-            this.currentInputTranscription = '';
-            this.currentOutputTranscription = '';
-          }
-
-          const base64Audio = message.serverContent?.modelTurn?.parts[0]?.inlineData?.data;
-          if (base64Audio && this.outputAudioContext) {
-            this.config.onModelSpeakingChange(true);
-            this.nextStartTime = Math.max(this.nextStartTime, this.outputAudioContext.currentTime);
             
-            try {
-              const audioBuffer = await decodeAudioData(decode(base64Audio), this.outputAudioContext, 24000, 1);
-              if (!this.isActive || !this.outputAudioContext) return;
-
-              const source = this.outputAudioContext.createBufferSource();
-              source.buffer = audioBuffer;
-              source.connect(this.outputAudioContext.destination);
+            this.sessionPromise?.then(resolvedSession => {
+              if (!this.isActive) {
+                resolvedSession.close();
+                return;
+              }
+              this.session = resolvedSession;
+              const source = this.inputAudioContext!.createMediaStreamSource(this.stream!);
               
-              source.onended = () => {
-                this.sources.delete(source);
-                if (this.sources.size === 0) {
-                  this.config.onModelSpeakingChange(false);
-                }
+              // PERFORMANCE TUNING: Use 4096 buffer size to reduce CPU wake-up frequency
+              this.processor = this.inputAudioContext!.createScriptProcessor(4096, 1, 1);
+              
+              this.processor.onaudioprocess = (e) => {
+                if (!this.isActive || !this.session) return;
+                const inputData = e.inputBuffer.getChannelData(0);
+                const pcmBlob = this.createBlob(inputData);
+                this.sessionPromise?.then(s => {
+                  if (this.isActive) s.sendRealtimeInput({ media: pcmBlob });
+                });
               };
               
-              source.start(this.nextStartTime);
-              this.nextStartTime += audioBuffer.duration;
-              this.sources.add(source);
-            } catch (err) {
-              console.error("GeminiLive: Error decoding audio part:", err);
+              source.connect(this.processor);
+              this.processor.connect(this.inputAudioContext!.destination);
+              this.config.onOpen?.();
+            });
+          },
+          onmessage: async (message: LiveServerMessage) => {
+            if (!this.isActive) return;
+
+            if (message.serverContent?.inputTranscription) {
+              const text = message.serverContent.inputTranscription.text;
+              this.currentInputTranscription += text;
+              this.config.onUserText?.(this.currentInputTranscription);
             }
-          }
+            if (message.serverContent?.outputTranscription) {
+              const text = message.serverContent.outputTranscription.text;
+              this.currentOutputTranscription += text;
+              this.config.onAiText?.(this.currentOutputTranscription);
+            }
 
-          if (message.serverContent?.interrupted) {
-            this.stopAllAudio();
-            this.config.onModelSpeakingChange(false);
-          }
-        },
-        onerror: (e: any) => {
-          console.error("GeminiLive SDK Error:", e);
-          this.config.onError(e);
-        },
-        onclose: () => {
-          console.debug("GeminiLive: Connection closed by server.");
-          this.cleanup();
-          this.config.onClose();
-        },
-      },
-      config: {
-        responseModalities: [Modality.AUDIO],
-        speechConfig: {
-          voiceConfig: { prebuiltVoiceConfig: { voiceName: this.config.voice } },
-        },
-        systemInstruction: this.config.systemInstruction + (initialHistory ? `\n\nRecent context:\n${initialHistory}` : ''),
-        outputAudioTranscription: {},
-        inputAudioTranscription: {},
-      }
-    });
+            if (message.serverContent?.turnComplete) {
+              this.config.onTurnComplete?.(this.currentInputTranscription.trim(), this.currentOutputTranscription.trim());
+              this.currentInputTranscription = '';
+              this.currentOutputTranscription = '';
+            }
 
-    return this.sessionPromise;
+            const base64Audio = message.serverContent?.modelTurn?.parts[0]?.inlineData?.data;
+            if (base64Audio && this.outputAudioContext && this.isActive) {
+              this.config.onModelSpeakingChange?.(true);
+              this.nextStartTime = Math.max(this.nextStartTime, this.outputAudioContext.currentTime);
+              
+              try {
+                const audioBuffer = await decodeAudioData(decode(base64Audio), this.outputAudioContext, 24000, 1);
+                if (!this.isActive || !this.outputAudioContext) return;
+
+                const source = this.outputAudioContext.createBufferSource();
+                source.buffer = audioBuffer;
+                source.connect(this.outputAudioContext.destination);
+                
+                source.onended = () => {
+                  this.sources.delete(source);
+                  if (this.sources.size === 0) this.config.onModelSpeakingChange?.(false);
+                };
+                
+                source.start(this.nextStartTime);
+                this.nextStartTime += audioBuffer.duration;
+                this.sources.add(source);
+              } catch (err) {
+                // Silenced verbose audio-skipping logs for performance
+              }
+            }
+
+            if (message.serverContent?.interrupted) {
+              this.stopAllAudio();
+              this.config.onModelSpeakingChange?.(false);
+            }
+          },
+          onerror: (e: any) => {
+            console.error("Neural Link Error:", e);
+            this.config.onError?.(e);
+            this.cleanup();
+          },
+          onclose: (e: any) => {
+            this.cleanup();
+            this.config.onClose?.();
+          },
+        },
+        config: {
+          responseModalities: [Modality.AUDIO],
+          speechConfig: {
+            voiceConfig: { prebuiltVoiceConfig: { voiceName: this.config.voice } },
+          },
+          systemInstruction: fullInstruction,
+          outputAudioTranscription: {},
+          inputAudioTranscription: {},
+        }
+      });
+    } catch (err) {
+      await this.cleanup();
+      throw err;
+    } finally {
+      this.isConnecting = false;
+    }
   }
 
   private createBlob(data: Float32Array): Blob {
@@ -242,99 +291,60 @@ export class GeminiLiveService {
 
   private stopAllAudio() {
     this.sources.forEach(s => {
-      try { s.stop(); } catch (e) {}
+      try { s.stop(); s.disconnect(); } catch (e) {}
     });
     this.sources.clear();
     this.nextStartTime = 0;
   }
 
-  private async cleanup() {
-    this.isActive = false;
-    this.stopAllAudio();
-    
-    if (this.stream) {
-      this.stream.getTracks().forEach(t => t.stop());
-      this.stream = null;
-    }
-    
-    if (this.inputAudioContext) {
-      try {
-        if (this.inputAudioContext.state !== 'closed') {
-          await this.inputAudioContext.close();
-        }
-      } catch (e) {
-        console.warn("GeminiLive: Failed to close input context:", e);
-      }
-      this.inputAudioContext = null;
-    }
-    
-    if (this.outputAudioContext) {
-      try {
-        if (this.outputAudioContext.state !== 'closed') {
-          await this.outputAudioContext.close();
-        }
-      } catch (e) {
-        console.warn("GeminiLive: Failed to close output context:", e);
-      }
-      this.outputAudioContext = null;
-    }
-    
-    this.sessionPromise = null;
-  }
-
-  disconnect(): SessionTranscript[] {
-    // Before disconnecting, capture any final trailing transcription
-    if (this.currentInputTranscription.trim()) {
-      this.transcriptHistory.push({ role: 'user', text: this.currentInputTranscription.trim() });
-    }
-    if (this.currentOutputTranscription.trim()) {
-      this.transcriptHistory.push({ role: 'model', text: this.currentOutputTranscription.trim() });
-    }
-    
-    const finalTranscript = [...this.transcriptHistory];
-    this.cleanup();
-    return finalTranscript;
+  public async disconnect(): Promise<void> {
+    await this.cleanup();
   }
 }
 
 let activeGlobalService: GeminiLiveService | null = null;
+let globalConnecting = false;
 
-/**
- * Functional wrapper for backward compatibility with existing components.
- */
 export const connect = async (
   systemInstruction: string, 
-  initialContext: string, 
+  initialContext: Message[], 
   onSpeakingChange: (speaking: boolean) => void,
-  voiceName: string = 'Zephyr'
+  onTurnComplete: (userText: string, aiText: string) => void,
+  onUserText?: (text: string) => void,
+  onAiText?: (text: string) => void,
+  voiceName: string = 'Zephyr',
+  apiKey?: string
 ) => {
-  if (activeGlobalService) {
-    activeGlobalService.disconnect();
-  }
+  if (globalConnecting) return;
+  globalConnecting = true;
 
-  activeGlobalService = new GeminiLiveService({
-    apiKey: '', 
-    model: 'gemini-2.5-flash-native-audio-preview-12-2025',
-    voice: voiceName,
-    systemInstruction,
-    onOpen: () => {},
-    onModelSpeakingChange: onSpeakingChange,
-    onMessage: () => {},
-    onError: (e) => console.error("Neural Link Error:", e),
-    onClose: () => {},
-  });
-  
-  await activeGlobalService.connect(initialContext);
+  try {
+    if (activeGlobalService) {
+      await activeGlobalService.disconnect();
+      activeGlobalService = null;
+    }
+
+    activeGlobalService = new GeminiLiveService({
+      model: 'gemini-2.5-flash-native-audio-preview-12-2025',
+      voice: voiceName,
+      systemInstruction,
+      initialContext,
+      apiKey,
+      onModelSpeakingChange: onSpeakingChange,
+      onTurnComplete,
+      onUserText,
+      onAiText,
+      onError: (e) => console.error("Neural Link Disruption:", e),
+    });
+    await activeGlobalService.connect();
+  } finally {
+    globalConnecting = false;
+  }
 };
 
-/**
- * Returns structured history instead of string.
- */
-export const disconnect = async (): Promise<SessionTranscript[]> => {
+export const disconnect = async (): Promise<void> => {
   if (activeGlobalService) {
-    const history = activeGlobalService.disconnect();
+    await activeGlobalService.disconnect();
     activeGlobalService = null;
-    return history;
   }
-  return [];
 };

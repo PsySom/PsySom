@@ -1,14 +1,8 @@
-
 import { useState, useCallback, useRef } from 'react';
-import { LiveServerMessage } from '@google/genai';
 import { useProjects } from '../contexts/ProjectContext';
-import { GeminiLiveService, SessionTranscript } from '../lib/ai/geminiLive';
+import { GeminiLiveService } from '../lib/ai/geminiLive';
 
-interface UseVoiceChatProps {
-  onSessionComplete?: (transcript: SessionTranscript[]) => void;
-}
-
-export const useVoiceChat = ({ onSessionComplete }: UseVoiceChatProps = {}) => {
+export const useVoiceChat = () => {
   const { activeProject } = useProjects();
   const [isConnected, setIsConnected] = useState(false);
   const [isListening, setIsListening] = useState(false);
@@ -18,38 +12,29 @@ export const useVoiceChat = ({ onSessionComplete }: UseVoiceChatProps = {}) => {
   
   const serviceRef = useRef<GeminiLiveService | null>(null);
 
-  const stopSession = useCallback(() => {
-    let finalTranscript: SessionTranscript[] = [];
-    
+  const stopSession = useCallback(async () => {
     if (serviceRef.current) {
-      finalTranscript = serviceRef.current.disconnect();
+      await serviceRef.current.disconnect();
       serviceRef.current = null;
     }
-
     setIsConnected(false);
     setIsListening(false);
     setIsModelSpeaking(false);
-
-    if (onSessionComplete && finalTranscript.length > 0) {
-      onSessionComplete(finalTranscript);
-    }
-
     setTranscriptionHistory([]);
-  }, [onSessionComplete]);
+  }, []);
 
-  const startSession = useCallback(async (initialHistory: string = '') => {
+  const startSession = useCallback(async (initialHistory: string = '', onTurn: (u: string, a: string) => void) => {
     if (!activeProject) return;
     setError(null);
 
     try {
+      // Ensure any existing session is purged
+      await stopSession();
+
       const service = new GeminiLiveService({
-        apiKey: process.env.API_KEY as string,
         model: 'gemini-2.5-flash-native-audio-preview-12-2025',
         voice: activeProject.config.voice || 'Zephyr',
-        systemInstruction: `You are ${activeProject.name}, a Sovereign Neural Intelligence interface.
-          ROLE: ${activeProject.config.role}. 
-          CONVERSATION STYLE: Concise, professional, and helpful. Respond as a real-time voice assistant.
-          SUPPORTED LANGUAGES: Russian, English, French. Match the user's language choice.`,
+        systemInstruction: `You are ${activeProject.name}, a Sovereign Neural OS interface. Your logic is powered by a private vault. Be direct and insightful.`,
         onOpen: () => {
           setIsConnected(true);
           setIsListening(true);
@@ -57,19 +42,22 @@ export const useVoiceChat = ({ onSessionComplete }: UseVoiceChatProps = {}) => {
         onModelSpeakingChange: (speaking) => {
           setIsModelSpeaking(speaking);
         },
-        onMessage: (message: LiveServerMessage) => {
-          if (message.serverContent?.inputTranscription) {
-            const text = message.serverContent.inputTranscription.text;
-            setTranscriptionHistory(prev => [...prev, `You: ${text}`].slice(-3));
-          }
-          if (message.serverContent?.outputTranscription) {
-            const text = message.serverContent.outputTranscription.text;
-            setTranscriptionHistory(prev => [...prev, `OS: ${text}`].slice(-3));
-          }
+        onUserText: (text) => {
+           setTranscriptionHistory(prev => [...prev.slice(-2), `You: ${text}`]);
+        },
+        onAiText: (text) => {
+           setTranscriptionHistory(prev => [...prev.slice(-2), `OS: ${text}`]);
+        },
+        onTurnComplete: (u, a) => {
+           onTurn(u, a);
+           setTranscriptionHistory([]);
         },
         onError: (err) => {
-          console.error("Voice Link Error:", err);
-          setError(err.message || "Neural Link connection failure.");
+          const errMsg = err?.message || "Neural Link disruption.";
+          setError(errMsg);
+          if (errMsg.includes("Insufficient") || errMsg.includes("1006")) {
+            console.warn("Resource exhaustion detected. Purging neural core...");
+          }
           stopSession();
         },
         onClose: () => {
@@ -78,11 +66,13 @@ export const useVoiceChat = ({ onSessionComplete }: UseVoiceChatProps = {}) => {
       });
 
       serviceRef.current = service;
-      await service.connect(initialHistory);
+      // Fix: The connect method on GeminiLiveService does not take arguments. 
+      // If history is required, it should be provided via initialContext in the constructor.
+      await service.connect();
     } catch (err: any) {
-      console.error("Start Session Error:", err);
-      setError(err.message || "Failed to initialize voice hardware.");
-      stopSession();
+      console.error("Voice Engine Failure:", err);
+      setError(err.message || "Microphone initialization failed. Check browser permissions.");
+      await stopSession();
     }
   }, [activeProject, stopSession]);
 

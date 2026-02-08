@@ -3,7 +3,7 @@ import { FunctionDeclaration, Type } from '@google/genai';
 import { DriveService } from '../drive/driveService';
 
 /**
- * Tool definitions for Google Drive interaction.
+ * Tool definitions for Google Drive interaction and Multimodal Generation.
  * These schemas inform Gemini about available capabilities.
  */
 export const driveTools: FunctionDeclaration[] = [
@@ -88,6 +88,59 @@ export const driveTools: FunctionDeclaration[] = [
       required: ['fileId', 'content'],
     },
   },
+  {
+    name: 'open_branch',
+    description: 'Loads a different conversation thread (branch) into the current session. Use this when the user wants to switch contexts or continue an older discussion by name.',
+    parameters: {
+      type: Type.OBJECT,
+      properties: {
+        id: {
+          type: Type.STRING,
+          description: 'The unique Drive File ID of the branch JSON file.',
+        },
+        name: {
+          type: Type.STRING,
+          description: 'The display name of the branch.',
+        },
+      },
+      required: ['id', 'name'],
+    },
+  },
+  {
+    name: 'save_branch_persistence',
+    description: 'Explicitly saves the current conversation thread to the neural vault. Call this after significant breakthroughs or when the user asks to "save" or "commit" thoughts.',
+    parameters: {
+      type: Type.OBJECT,
+      properties: {
+        summary: {
+          type: Type.STRING,
+          description: 'A 2-sentence summary of the thread current state for future recall.',
+        },
+      },
+    },
+  },
+  {
+    name: 'generate_media',
+    description: 'Generates a high-quality image or video based on a detailed prompt. Essential for visualization tasks. Requires Creative Mode.',
+    parameters: {
+      type: Type.OBJECT,
+      properties: {
+        type: {
+          type: Type.STRING,
+          description: 'The medium to generate: "image" or "video".',
+        },
+        prompt: {
+          type: Type.STRING,
+          description: 'Comprehensive visual description, style, and camera direction.',
+        },
+        reference_file_id: {
+          type: Type.STRING,
+          description: 'Optional: ID of an existing Drive image to use as a style or subject reference (Image-to-Image / Image-to-Video).',
+        },
+      },
+      required: ['type', 'prompt'],
+    },
+  },
 ];
 
 /**
@@ -103,8 +156,6 @@ export async function executeDriveTool(name: string, args: any, defaultFolderId:
       return await driveService.readFile(args.fileId);
     case 'read_image':
       const imageData = await driveService.readImage(args.fileId);
-      // Return inlineData structure directly for easier integration if needed, 
-      // though typically function responses are JSON.
       return { 
         status: 'success', 
         visual_data: imageData,
@@ -117,6 +168,26 @@ export async function executeDriveTool(name: string, args: any, defaultFolderId:
     case 'update_file':
       await driveService.updateFile(args.fileId, args.content);
       return { status: 'success', message: `File with ID ${args.fileId} updated.` };
+    case 'open_branch':
+      return {
+        status: 'delegated',
+        action: 'open_branch',
+        id: args.id,
+        name: args.name
+      };
+    case 'save_branch_persistence':
+       return { 
+         status: 'delegated', 
+         action: 'save_branch',
+         summary: args.summary 
+       };
+    case 'generate_media':
+       return { 
+         status: 'delegated', 
+         type: args.type, 
+         prompt: args.prompt, 
+         reference_file_id: args.reference_file_id 
+       };
     default:
       throw new Error(`Tool "${name}" is not implemented.`);
   }

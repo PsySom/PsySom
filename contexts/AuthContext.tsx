@@ -1,10 +1,11 @@
+
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import { UserProfile, AuthState } from '../types';
 import { DriveService } from '../lib/drive/driveService';
 import { config } from '../config';
 
 // Global declaration for gapi
-declare const gapi: any;
+declare const window: any;
 
 interface AuthContextType extends AuthState {
   login: () => Promise<void>;
@@ -62,8 +63,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       
       // 2. Extract token from client state (set by driveService.loginUser internally)
       let accessToken = null;
-      if (typeof gapi !== 'undefined' && gapi.client) {
-        const tokenResponse = gapi.client.getToken();
+      if (typeof window.gapi !== 'undefined' && window.gapi?.client?.getToken) {
+        const tokenResponse = window.gapi.client.getToken();
         accessToken = tokenResponse?.access_token || null;
       }
       
@@ -78,7 +79,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       
     } catch (err: any) {
       console.error("AuthContext: Login failed", err);
-      setError(err.message || "Failed to authenticate with Google.");
+      if (err.message === "AUTH_DEAD") {
+        setError("Neural Link Severed. Please re-authenticate with Google Drive.");
+      } else {
+        setError(err.message || "Failed to authenticate with Google.");
+      }
     } finally {
       setIsLoading(false);
     }

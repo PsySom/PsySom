@@ -40,17 +40,21 @@ export const NewProjectModal: React.FC<NewProjectModalProps> = ({ isOpen, onClos
 
   const isSubmitting = status !== 'idle';
 
+  const handleInputKeyDown = (e: React.KeyboardEvent) => {
+    e.stopPropagation();
+  };
+
   return (
-    <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
+    <div className="fixed inset-0 z-[100] flex items-center justify-center p-0 md:p-4">
       <div 
         className="absolute inset-0 bg-zinc-950/40 dark:bg-zinc-950/80 backdrop-blur-xl animate-in fade-in duration-300"
         onClick={onClose}
       ></div>
 
-      <div className="relative bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 w-full max-w-xl rounded-[2rem] shadow-2xl overflow-hidden animate-in fade-in zoom-in duration-300">
-        <div className="p-8 border-b border-zinc-100 dark:border-zinc-800/50 bg-zinc-50 dark:bg-zinc-900/50 flex items-center justify-between">
+      <div className="relative w-full h-full md:h-auto md:max-h-[90vh] md:max-w-xl bg-white dark:bg-zinc-900 border-none md:border border-zinc-200 dark:border-zinc-800 rounded-none md:rounded-[2rem] shadow-2xl flex flex-col overflow-hidden animate-in fade-in zoom-in duration-300">
+        <div className="p-5 sm:p-8 border-b border-zinc-100 dark:border-zinc-800/50 bg-zinc-50 dark:bg-zinc-900/50 flex items-center justify-between shrink-0">
           <div>
-            <h2 className="text-2xl font-black text-slate-900 dark:text-white tracking-tight">Initialize Workspace</h2>
+            <h2 className="text-xl sm:text-2xl font-black text-slate-900 dark:text-white tracking-tight">Initialize Workspace</h2>
             <p className="text-zinc-500 text-[10px] mt-1 font-mono uppercase tracking-[0.2em] font-bold">Sovereign Neural Vault: Drive V3</p>
           </div>
           <button 
@@ -63,61 +67,66 @@ export const NewProjectModal: React.FC<NewProjectModalProps> = ({ isOpen, onClos
           </button>
         </div>
 
-        <form onSubmit={handleSubmit} className="p-8 space-y-6">
-          {error && (
-            <div className="p-4 bg-red-500/10 border border-red-500/20 rounded-2xl animate-in slide-in-from-top-2">
-              <p className="text-xs text-red-500 dark:text-red-400 font-medium flex items-center gap-3">
-                <svg className="w-5 h-5 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
-                </svg>
-                {error}
-              </p>
-            </div>
-          )}
+        <form onSubmit={handleSubmit} className="flex-1 flex flex-col overflow-hidden">
+          <div className="flex-1 overflow-y-auto p-5 sm:p-8 space-y-6 scrollbar-hide">
+            {error && (
+              <div className="p-4 bg-red-500/10 border border-red-500/20 rounded-2xl animate-in slide-in-from-top-2">
+                <p className="text-xs text-red-500 dark:text-red-400 font-medium flex items-center gap-3">
+                  <svg className="w-5 h-5 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                  </svg>
+                  {error}
+                </p>
+              </div>
+            )}
 
-          <div className="space-y-3">
-            <label className="text-[10px] font-black text-zinc-500 uppercase tracking-widest pl-1">Knowledge OS Identifier</label>
-            <input 
-              autoFocus
-              required
-              type="text"
-              value={formData.name}
-              onChange={e => setFormData(prev => ({ ...prev, name: e.target.value }))}
-              placeholder="e.g. Project Hyperion"
-              className="w-full bg-zinc-50 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 rounded-2xl px-5 py-4 text-slate-900 dark:text-white placeholder:text-zinc-300 dark:placeholder:text-zinc-800 focus:outline-none focus:ring-2 focus:ring-indigo-500/30 transition-all text-lg font-bold shadow-inner"
-            />
-          </div>
-
-          <div className="grid md:grid-cols-2 gap-6">
             <div className="space-y-3">
-              <label className="text-[10px] font-black text-zinc-500 uppercase tracking-widest pl-1">Neural Persona</label>
+              <label className="text-[10px] font-black text-zinc-500 uppercase tracking-widest pl-1">Knowledge OS Identifier</label>
               <input 
+                autoFocus
+                required
                 type="text"
-                value={formData.role}
-                onChange={e => setFormData(prev => ({ ...prev, role: e.target.value }))}
-                placeholder="e.g. Lead System Architect"
-                className="w-full bg-zinc-50 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 rounded-2xl px-5 py-4 text-slate-900 dark:text-white placeholder:text-zinc-300 dark:placeholder:text-zinc-800 focus:outline-none focus:ring-2 focus:ring-indigo-500/30 transition-all text-sm font-bold shadow-inner"
+                value={formData.name}
+                onChange={e => setFormData(prev => ({ ...prev, name: e.target.value }))}
+                onKeyDown={handleInputKeyDown}
+                placeholder="e.g. Project Hyperion"
+                className="w-full bg-zinc-50 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 rounded-2xl px-5 py-4 text-slate-900 dark:text-white placeholder:text-zinc-300 dark:placeholder:text-zinc-800 focus:outline-none focus:ring-2 focus:ring-indigo-500/30 transition-all text-lg font-bold shadow-inner"
               />
             </div>
-            <div className="flex items-center pt-8">
-              <p className="text-[10px] text-zinc-500 leading-tight italic font-medium">
-                This persona defines the logic of the AI's reasoning cycles.
-              </p>
+
+            <div className="grid md:grid-cols-2 gap-6">
+              <div className="space-y-3">
+                <label className="text-[10px] font-black text-zinc-500 uppercase tracking-widest pl-1">Neural Persona</label>
+                <input 
+                  type="text"
+                  value={formData.role}
+                  onChange={e => setFormData(prev => ({ ...prev, role: e.target.value }))}
+                  onKeyDown={handleInputKeyDown}
+                  placeholder="e.g. Lead System Architect"
+                  className="w-full bg-zinc-50 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 rounded-2xl px-5 py-4 text-slate-900 dark:text-white placeholder:text-zinc-300 dark:placeholder:text-zinc-800 focus:outline-none focus:ring-2 focus:ring-indigo-500/30 transition-all text-sm font-bold shadow-inner"
+                />
+              </div>
+              <div className="flex items-center">
+                <p className="text-[10px] text-zinc-500 leading-tight italic font-medium">
+                  This persona defines the logic of the AI's reasoning cycles.
+                </p>
+              </div>
+            </div>
+
+            <div className="space-y-3">
+              <label className="text-[10px] font-black text-zinc-500 uppercase tracking-widest pl-1">Baseline Context & Mission</label>
+              <textarea 
+                rows={4}
+                value={formData.context}
+                onChange={e => setFormData(prev => ({ ...prev, context: e.target.value }))}
+                onKeyDown={handleInputKeyDown}
+                placeholder="Define core objectives, rules, and knowledge boundaries..."
+                className="w-full bg-zinc-50 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 rounded-2xl px-5 py-4 text-slate-900 dark:text-white placeholder:text-zinc-300 dark:placeholder:text-zinc-800 focus:outline-none focus:ring-2 focus:ring-indigo-500/30 transition-all resize-none text-sm font-medium leading-relaxed shadow-inner"
+              />
             </div>
           </div>
 
-          <div className="space-y-3">
-            <label className="text-[10px] font-black text-zinc-500 uppercase tracking-widest pl-1">Baseline Context & Mission</label>
-            <textarea 
-              rows={4}
-              value={formData.context}
-              onChange={e => setFormData(prev => ({ ...prev, context: e.target.value }))}
-              placeholder="Define core objectives, rules, and knowledge boundaries..."
-              className="w-full bg-zinc-50 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 rounded-2xl px-5 py-4 text-slate-900 dark:text-white placeholder:text-zinc-300 dark:placeholder:text-zinc-800 focus:outline-none focus:ring-2 focus:ring-indigo-500/30 transition-all resize-none text-sm font-medium leading-relaxed shadow-inner"
-            />
-          </div>
-
-          <div className="pt-4 flex gap-4">
+          <div className="p-5 sm:p-8 flex gap-4 bg-white dark:bg-zinc-900 border-t border-zinc-100 dark:border-zinc-800/50 shrink-0">
             <button
               type="button"
               onClick={onClose}
@@ -129,7 +138,7 @@ export const NewProjectModal: React.FC<NewProjectModalProps> = ({ isOpen, onClos
             <button
               disabled={isSubmitting || !formData.name.trim()}
               type="submit"
-              className="flex-1 px-6 py-4 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-30 text-white rounded-2xl font-black transition-all shadow-xl shadow-indigo-600/20 text-[10px] uppercase tracking-widest flex items-center justify-center gap-2"
+              className="flex-2 flex-[2] px-6 py-4 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-30 text-white rounded-2xl font-black transition-all shadow-xl shadow-indigo-600/20 text-[10px] uppercase tracking-widest flex items-center justify-center gap-2"
             >
               {status === 'authorizing' ? (
                 <>

@@ -6,6 +6,8 @@ export interface Message {
   content: string;
   timestamp: number;
   type: MessageType;
+  imageContext?: string; // Internal field for vision context
+  base64Attachment?: string; // Explicit base64 string for vision analysis
   attachment?: {
     id: string;
     name: string;
@@ -17,6 +19,7 @@ export interface Branch {
   id: string;
   name: string;
   note?: string;
+  summary?: string; // Neural summary for context recall
   createdAt: number;
   updatedAt: number;
   messages: Message[];
@@ -38,6 +41,11 @@ export interface ProjectConfig {
   themeColor: string;
   attachedFolderId: string;
   description?: string;
+  logicModelId?: string;
+  imageModelId?: string;
+  videoModelId?: string;
+  reasoningBudget?: number;
+  systemInstruction?: string;
 }
 
 export interface Project {

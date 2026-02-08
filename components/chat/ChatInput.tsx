@@ -1,11 +1,12 @@
 
 import React, { useState, useRef, useEffect } from 'react';
+import { Paperclip, X, BrainCircuit, Sparkles, Languages, Mic, SendHorizontal, Loader2 } from 'lucide-react';
 import { DriveService } from '../../lib/drive/driveService';
 import { useProjects } from '../../contexts/ProjectContext';
 import { Message } from '../../types';
 
 interface ChatInputProps {
-  onSend: (text: string, attachment?: Message['attachment']) => void;
+  onSend: (text: string, attachment?: Message['attachment'] | string | null, options?: { isDeepThink?: boolean; isCreative?: boolean }) => void;
   onVoiceTrigger?: () => void;
   disabled: boolean;
   placeholder?: string;
@@ -13,8 +14,8 @@ interface ChatInputProps {
 
 type Language = { code: string; label: string; bcp47: string };
 const LANGUAGES: Language[] = [
-  { code: 'EN', label: 'English', bcp47: 'en-US' },
   { code: 'RU', label: 'Русский', bcp47: 'ru-RU' },
+  { code: 'EN', label: 'English', bcp47: 'en-US' },
   { code: 'FR', label: 'Français', bcp47: 'fr-FR' },
 ];
 
@@ -22,7 +23,14 @@ export const ChatInput: React.FC<ChatInputProps> = ({ onSend, onVoiceTrigger, di
   const [text, setText] = useState('');
   const [isDictating, setIsDictating] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
-  const [langIndex, setLangIndex] = useState(0); 
+  const [isCreativeMode, setIsCreativeMode] = useState(false);
+  const [isDeepThink, setIsDeepThink] = useState(false);
+  const [langIndex, setLangIndex] = useState(() => {
+    const saved = localStorage.getItem('if-input-lang-idx');
+    return saved ? parseInt(saved, 10) : 0;
+  }); 
+  const [imagePreview, setImagePreview] = useState<string | null>(null);
+  
   const { activeProject } = useProjects();
   
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -30,43 +38,88 @@ export const ChatInput: React.FC<ChatInputProps> = ({ onSend, onVoiceTrigger, di
   const recognitionRef = useRef<any>(null);
   const isManuallyStopping = useRef(false);
 
-  const currentLang = LANGUAGES[langIndex];
+  const inputLang = LANGUAGES[langIndex];
+
+  useEffect(() => {
+    localStorage.setItem('if-input-lang-idx', langIndex.toString());
+  }, [langIndex]);
 
   const handleSend = () => {
-    if (text.trim() && !disabled) {
-      onSend(text);
+    if ((text.trim() || imagePreview) && !disabled) {
+      onSend(text.trim(), imagePreview, { 
+        isDeepThink, 
+        isCreative: isCreativeMode 
+      });
+      
       setText('');
+      setImagePreview(null);
+      if (fileInputRef.current) {
+        fileInputRef.current.value = '';
+      }
       if (textareaRef.current) {
         textareaRef.current.style.height = 'auto';
       }
     }
   };
 
-  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
+  const clearImagePreview = (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setImagePreview(null);
+    if (fileInputRef.current) {
+      fileInputRef.current.value = '';
+    }
+  };
+
+  const handleFileSelection = async (file: File) => {
     if (!file || !activeProject) return;
 
-    setIsUploading(true);
-    const driveService = DriveService.getInstance();
-    try {
-      const folderId = activeProject.config.attachedFolderId || activeProject.driveFolderId;
-      const fileId = await driveService.uploadFile(file, folderId);
-      
-      const attachmentMsg = `[NEURAL_ATTACHMENT: ${file.name} (ID: ${fileId})] I have ingested this asset into the neural vault.`;
-      const attachmentObj = {
-        id: fileId,
-        name: file.name,
-        mimeType: file.type || 'application/octet-stream'
+    if (file.type.startsWith('image/')) {
+      const reader = new FileReader();
+      reader.onload = () => {
+        setImagePreview(reader.result as string);
       };
-      
-      onSend(attachmentMsg, attachmentObj);
-      
-    } catch (err: any) {
-      console.error("Vault Sync Failure:", err);
-      alert(`Sovereign Vault Error: ${err.message || "Failed to upload file."}`);
-    } finally {
-      setIsUploading(false);
-      if (fileInputRef.current) fileInputRef.current.value = '';
+      reader.readAsDataURL(file);
+    } else {
+      setIsUploading(true);
+      const driveService = DriveService.getInstance();
+      try {
+        const folderId = activeProject.config.attachedFolderId || activeProject.driveFolderId;
+        const fileId = await driveService.uploadFile(file, folderId);
+        
+        const attachmentMsg = `[NEURAL_ATTACHMENT: ${file.name} (ID: ${fileId})] I have ingested this asset into the neural vault.`;
+        const attachmentObj = {
+          id: fileId,
+          name: file.name,
+          mimeType: file.type || 'application/octet-stream'
+        };
+        
+        onSend(attachmentMsg, attachmentObj, { isDeepThink, isCreative: isCreativeMode });
+      } catch (err: any) {
+        console.error("Vault Sync Failure:", err);
+        alert(`Sovereign Vault Error: ${err.message || "Failed to upload file."}`);
+      } finally {
+        setIsUploading(false);
+      }
+    }
+  };
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) handleFileSelection(file);
+  };
+
+  const handlePaste = (e: React.ClipboardEvent) => {
+    const items = e.clipboardData.items;
+    for (let i = 0; i < items.length; i++) {
+      if (items[i].type.indexOf('image') !== -1) {
+        const file = items[i].getAsFile();
+        if (file) {
+          e.preventDefault();
+          handleFileSelection(file);
+          return;
+        }
+      }
     }
   };
 
@@ -78,6 +131,11 @@ export const ChatInput: React.FC<ChatInputProps> = ({ onSend, onVoiceTrigger, di
   };
 
   const cycleLanguage = () => {
+    if (isDictating) {
+      isManuallyStopping.current = true;
+      recognitionRef.current?.stop();
+      setIsDictating(false);
+    }
     setLangIndex((prev) => (prev + 1) % LANGUAGES.length);
   };
 
@@ -85,6 +143,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({ onSend, onVoiceTrigger, di
     if (isDictating) {
       isManuallyStopping.current = true;
       recognitionRef.current?.stop();
+      setIsDictating(false);
       return;
     }
 
@@ -98,26 +157,33 @@ export const ChatInput: React.FC<ChatInputProps> = ({ onSend, onVoiceTrigger, di
     const recognition = new SpeechRecognition();
     recognition.continuous = true;
     recognition.interimResults = true;
-    recognition.lang = currentLang.bcp47;
+    recognition.lang = inputLang.bcp47;
 
     recognition.onstart = () => setIsDictating(true);
+    
+    recognition.onerror = (event: any) => {
+      console.error("Neural Dictation Error:", event.error);
+      setIsDictating(false);
+    };
+
     recognition.onend = () => {
-      if (!isManuallyStopping.current) {
-        try { recognition.start(); } catch (e) { setIsDictating(false); }
-      } else {
-        setIsDictating(false);
-      }
+      setIsDictating(false);
+      recognitionRef.current = null;
     };
 
     recognition.onresult = (event: any) => {
       let finalTranscript = '';
       for (let i = event.resultIndex; i < event.results.length; ++i) {
-        if (event.results[i].isFinal) finalTranscript += event.results[i][0].transcript;
+        if (event.results[i].isFinal) {
+          finalTranscript += event.results[i][0].transcript;
+        }
       }
+      
       if (finalTranscript) {
         setText(prev => {
           const base = prev.trim();
-          return base === '' ? finalTranscript : `${base} ${finalTranscript}`;
+          const cleanNew = finalTranscript.trim();
+          return base === '' ? cleanNew : `${base} ${cleanNew}`;
         });
       }
     };
@@ -134,10 +200,32 @@ export const ChatInput: React.FC<ChatInputProps> = ({ onSend, onVoiceTrigger, di
   }, [text]);
 
   return (
-    <div className="relative group max-w-4xl mx-auto w-full px-4 md:px-0">
-      <div className={`absolute -inset-1 bg-gradient-to-r from-indigo-500/20 via-purple-600/20 to-indigo-500/20 rounded-2xl blur-xl transition-opacity duration-1000 ${isDictating || isUploading ? 'opacity-100' : 'opacity-0 group-focus-within:opacity-100'}`}></div>
+    <div className="relative group max-w-4xl mx-auto w-full px-1 sm:px-0 flex flex-col gap-2 sm:gap-3">
+      {imagePreview && (
+        <div className="relative inline-block self-start animate-in zoom-in-95 fade-in duration-300 ml-2">
+           <div className="p-1 bg-white dark:bg-zinc-900 border border-indigo-500/30 rounded-xl sm:rounded-2xl shadow-2xl">
+             <img src={imagePreview} alt="Vision Input" className="w-16 h-16 sm:w-24 sm:h-24 object-cover rounded-lg sm:rounded-xl border border-zinc-200 dark:border-zinc-800" />
+             <button 
+               type="button"
+               onClick={clearImagePreview}
+               className="absolute -top-2 -right-2 bg-red-600 text-white rounded-full p-1.5 shadow-lg hover:scale-110 active:scale-90 transition-transform"
+               title="Remove attachment"
+             >
+               <X size={10} strokeWidth={3} className="sm:w-3 sm:h-3" />
+             </button>
+           </div>
+        </div>
+      )}
+
+      <div className={`absolute -inset-1 bg-gradient-to-r from-indigo-500/20 via-purple-600/20 to-teal-500/20 rounded-2xl blur-xl transition-opacity duration-1000 ${isDictating || isUploading || isCreativeMode || isDeepThink || imagePreview ? 'opacity-100' : 'opacity-0 group-focus-within:opacity-100'}`}></div>
       
-      <div className={`relative flex items-end gap-2 bg-white/95 dark:bg-zinc-900/90 backdrop-blur-3xl border ${isDictating ? 'border-red-500/50 shadow-[0_0_40px_rgba(239,68,68,0.1)]' : isUploading ? 'border-indigo-500/50 animate-pulse' : 'border-zinc-200 dark:border-zinc-800'} rounded-2xl p-2 focus-within:border-indigo-500/40 focus-within:ring-1 focus-within:ring-indigo-500/20 transition-all shadow-2xl overflow-hidden`}>
+      <div className={`relative flex items-end gap-1 sm:gap-2 bg-white/95 dark:bg-zinc-900/90 backdrop-blur-3xl border ${
+        isDeepThink ? 'border-teal-500/50 shadow-[0_0_30px_rgba(20,184,166,0.15)]' :
+        isCreativeMode ? 'border-purple-500/50 shadow-[0_0_30px_rgba(168,85,247,0.15)]' : 
+        isDictating ? 'border-red-500/50 shadow-[0_0_40px_rgba(239,68,68,0.1)]' : 
+        isUploading ? 'border-indigo-500/50 animate-pulse' : 
+        'border-zinc-200 dark:border-zinc-800'
+      } rounded-xl sm:rounded-2xl p-1 sm:p-2 focus-within:border-indigo-500/40 focus-within:ring-1 focus-within:ring-indigo-500/20 transition-all shadow-2xl overflow-hidden`}>
         
         <input 
           type="file" 
@@ -146,67 +234,78 @@ export const ChatInput: React.FC<ChatInputProps> = ({ onSend, onVoiceTrigger, di
           className="hidden" 
         />
 
-        <button
-          type="button"
-          onClick={() => fileInputRef.current?.click()}
-          disabled={disabled || isUploading}
-          className={`self-center ml-2 p-3 rounded-xl transition-all ${isUploading ? 'bg-indigo-600/20 text-indigo-500' : 'text-zinc-400 hover:text-indigo-600 dark:text-zinc-500 dark:hover:text-indigo-400 hover:bg-zinc-100 dark:hover:bg-zinc-800'}`}
-          title="Ingest Asset"
-        >
-          {isUploading ? (
-            <div className="w-5 h-5 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin"></div>
-          ) : (
-            <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-            </svg>
-          )}
-        </button>
+        <div className="flex items-center gap-0.5 sm:gap-1 self-center ml-0.5 sm:ml-1">
+          <button
+            type="button"
+            onClick={() => fileInputRef.current?.click()}
+            disabled={disabled || isUploading}
+            className={`p-2 sm:p-3 rounded-lg sm:rounded-xl transition-all relative group/attachment ${imagePreview || isUploading ? 'text-indigo-600 bg-indigo-500/10' : 'text-zinc-400 hover:text-indigo-600 dark:text-zinc-500 dark:hover:text-indigo-400 hover:bg-zinc-100 dark:hover:bg-zinc-800'}`}
+            title="Attach Media"
+          >
+            {isUploading ? (
+              <Loader2 size={18} className="animate-spin sm:w-5 sm:h-5" />
+            ) : (
+              <Paperclip size={18} strokeWidth={1.5} className={`sm:w-5 sm:h-5 ${imagePreview ? 'animate-bounce' : ''}`} />
+            )}
+          </button>
+
+          <button
+            type="button"
+            onClick={() => {
+              setIsDeepThink(!isDeepThink);
+              if (!isDeepThink) setIsCreativeMode(false);
+            }}
+            disabled={disabled || isUploading}
+            className={`p-2 sm:p-3 rounded-lg sm:rounded-xl transition-all relative overflow-hidden group/brain ${isDeepThink ? 'bg-gradient-to-tr from-teal-600 to-cyan-500 text-white shadow-lg' : 'text-zinc-400 hover:text-teal-600 dark:text-zinc-500 dark:hover:text-teal-400 hover:bg-zinc-100 dark:hover:bg-zinc-800'}`}
+            title="Deep Think"
+          >
+            <BrainCircuit size={18} className={`sm:w-5 sm:h-5 relative z-10 ${isDeepThink ? 'animate-pulse' : ''}`} />
+          </button>
+        </div>
 
         <button
           type="button"
           onClick={cycleLanguage}
           disabled={disabled || isDictating}
-          className={`self-center px-3 py-1.5 rounded-xl text-[10px] font-black font-mono transition-all uppercase border ${
+          className={`self-center w-8 h-8 sm:w-10 sm:h-10 flex items-center justify-center rounded-lg sm:rounded-xl transition-all border ${
             isDictating 
-              ? 'bg-zinc-100 dark:bg-zinc-800 text-zinc-400 dark:text-zinc-600 border-zinc-200 dark:border-zinc-700' 
-              : 'bg-indigo-600/10 text-indigo-600 dark:text-indigo-400 border-indigo-500/20 hover:bg-indigo-600 hover:text-white dark:hover:bg-indigo-600 dark:hover:text-white'
+              ? 'bg-zinc-100 dark:bg-zinc-800 text-zinc-400 dark:text-zinc-600 border-transparent' 
+              : 'text-zinc-600 dark:text-zinc-300 hover:text-indigo-600 dark:hover:text-indigo-400 hover:bg-zinc-100 dark:hover:bg-zinc-800 border-zinc-200 dark:border-zinc-800'
           }`}
+          title={`Switch Language (${inputLang.label})`}
         >
-          {currentLang.code}
+          <span className="text-[8px] sm:text-[10px] font-black tracking-widest">{inputLang.code}</span>
         </button>
 
         <textarea
           ref={textareaRef}
           rows={1}
           value={text}
+          onPaste={handlePaste}
           onChange={(e) => setText(e.target.value)}
           onKeyDown={handleKeyDown}
-          placeholder={isUploading ? "Syncing with Vault..." : isDictating ? `Listening (${currentLang.code})...` : (placeholder || "Initiate neural flow...")}
+          placeholder={isUploading ? "Syncing..." : isDictating ? `Listening (${inputLang.code})...` : (placeholder || "Initiate flow...")}
           disabled={disabled || isUploading}
-          className="flex-1 bg-transparent border-none focus:outline-none text-zinc-900 dark:text-zinc-100 py-3.5 pl-2 resize-none max-h-[200px] text-sm md:text-base placeholder:text-zinc-400 dark:placeholder:text-zinc-700 disabled:opacity-50"
+          className="flex-1 bg-transparent border-none focus:outline-none text-zinc-900 dark:text-zinc-100 py-3 sm:py-3.5 pl-1 sm:pl-2 resize-none max-h-[150px] sm:max-h-[200px] text-base placeholder:text-zinc-400 dark:placeholder:text-zinc-700"
         />
         
-        <div className="flex items-center gap-2 self-end p-1">
+        <div className="flex items-center gap-1 self-end p-0.5 sm:p-1">
           <button 
             type="button"
             onClick={toggleDictation}
             disabled={disabled || isUploading}
-            className={`p-3.5 transition-all rounded-xl relative group/mic ${isDictating ? 'text-red-500 bg-red-500/10' : 'text-zinc-400 hover:text-indigo-600 dark:text-zinc-500 dark:hover:text-indigo-400 hover:bg-zinc-100 dark:hover:bg-zinc-800/50'}`}
+            className={`p-2.5 sm:p-3.5 transition-all rounded-lg sm:rounded-xl relative group/mic ${isDictating ? 'text-red-500 bg-red-500/10' : 'text-zinc-400 hover:text-indigo-600 dark:text-zinc-500 dark:hover:text-indigo-400 hover:bg-zinc-100 dark:hover:bg-zinc-800/50'}`}
           >
-            {isDictating && <span className="absolute inset-0 rounded-xl bg-red-500/20 animate-ping"></span>}
-            <svg className={`w-5 h-5 relative z-10 ${isDictating ? 'animate-pulse' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
-            </svg>
+            {isDictating && <span className="absolute inset-0 rounded-lg sm:rounded-xl bg-red-500/20 animate-ping"></span>}
+            <Mic size={18} className={`sm:w-5 sm:h-5 relative z-10 ${isDictating ? 'animate-pulse' : ''}`} />
           </button>
           
           <button 
             onClick={handleSend}
-            disabled={!text.trim() || disabled || isUploading}
-            className="p-3.5 bg-indigo-600 hover:bg-indigo-500 disabled:bg-zinc-100 dark:disabled:bg-zinc-800 disabled:text-zinc-300 dark:disabled:text-zinc-700 text-white rounded-xl transition-all shadow-xl shadow-indigo-600/20 active:scale-95 group/send"
+            disabled={(!text.trim() && !imagePreview) || disabled || isUploading}
+            className={`p-2.5 sm:p-3.5 ${isDeepThink ? 'bg-teal-600 hover:bg-teal-500 shadow-teal-600/20' : 'bg-indigo-600 hover:bg-indigo-500 shadow-indigo-600/20'} disabled:bg-zinc-100 dark:disabled:bg-zinc-800 disabled:text-zinc-300 dark:disabled:text-zinc-700 text-white rounded-lg sm:rounded-xl transition-all shadow-xl active:scale-95 group/send`}
           >
-            <svg className="w-5 h-5 group-hover/send:translate-x-0.5 transition-transform" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M14 5l7 7m0 0l-7 7m7-7H3" />
-            </svg>
+            <SendHorizontal size={18} className="sm:w-5 sm:h-5 group-hover/send:translate-x-0.5 transition-transform" />
           </button>
         </div>
       </div>

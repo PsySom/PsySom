@@ -21,6 +21,10 @@ export const CreateBranchModal: React.FC<CreateBranchModalProps> = ({ isOpen, on
     onClose();
   };
 
+  const handleInputKeyDown = (e: React.KeyboardEvent) => {
+    e.stopPropagation();
+  };
+
   return (
     <div className="fixed inset-0 z-[110] flex items-center justify-center p-4">
       <div className="absolute inset-0 bg-zinc-950/80 backdrop-blur-xl animate-in fade-in duration-300" onClick={onClose}></div>
@@ -46,6 +50,7 @@ export const CreateBranchModal: React.FC<CreateBranchModalProps> = ({ isOpen, on
               type="text"
               value={name}
               onChange={e => setName(e.target.value)}
+              onKeyDown={handleInputKeyDown}
               placeholder="e.g. Logic Analysis Alpha"
               className="w-full bg-zinc-950 border border-zinc-800 rounded-2xl px-5 py-4 text-white focus:outline-none focus:ring-2 focus:ring-indigo-500/30 transition-all font-medium"
             />
@@ -57,6 +62,7 @@ export const CreateBranchModal: React.FC<CreateBranchModalProps> = ({ isOpen, on
               rows={3}
               value={note}
               onChange={e => setNote(e.target.value)}
+              onKeyDown={handleInputKeyDown}
               placeholder="Context specific to this reasoning thread..."
               className="w-full bg-zinc-950 border border-zinc-800 rounded-2xl px-5 py-4 text-white focus:outline-none focus:ring-2 focus:ring-indigo-500/30 transition-all resize-none text-sm leading-relaxed"
             />

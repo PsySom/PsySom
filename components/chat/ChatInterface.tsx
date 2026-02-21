@@ -1,5 +1,6 @@
 
-import React, { useRef, useEffect, useState } from 'react';
+import React, { useRef, useEffect, useState, useCallback } from 'react';
+import { ChevronDown } from 'lucide-react';
 import { useProjects } from '../../contexts/ProjectContext';
 import { useChat } from '../../hooks/useChat';
 import { useTheme } from '../../contexts/ThemeContext';
@@ -8,6 +9,7 @@ import { ChatInput } from './ChatInput';
 import { VoiceOverlay } from './VoiceOverlay';
 import { LoadingSpinner } from '../ui/LoadingSpinner';
 import { useTTS } from '../../hooks/useTTS';
+import { OrbAvatar, DEFAULT_ORB_CONFIG } from '../ui/OrbAvatar';
 
 export const ChatInterface: React.FC = () => {
   const { 
@@ -23,6 +25,7 @@ export const ChatInterface: React.FC = () => {
   const { isPlaying, activeMessageId, toggle, setLatestMessage } = useTTS();
   const { theme, setTheme } = useTheme();
   const [isVoiceOpen, setIsVoiceOpen] = useState(false);
+  const [showScrollButton, setShowScrollButton] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
 
   const messages = Array.isArray(activeBranch?.messages) ? activeBranch.messages : [];
@@ -58,13 +61,8 @@ export const ChatInterface: React.FC = () => {
   }, [activeBranch, saveBranch, theme, setTheme]);
 
   useEffect(() => {
-    if (scrollRef.current) {
-      scrollRef.current.scrollTo({
-        top: scrollRef.current.scrollHeight,
-        behavior: 'smooth'
-      });
-    }
-  }, [messages, aiLoading]);
+    scrollToBottom();
+  }, [messages, aiLoading, scrollToBottom]);
 
   useEffect(() => {
     if (error) {
@@ -105,6 +103,35 @@ export const ChatInterface: React.FC = () => {
       await selectProject(pendingProjectId, true);
     }
   };
+
+  const scrollToBottom = useCallback(() => {
+    if (scrollRef.current) {
+      scrollRef.current.scrollTo({
+        top: scrollRef.current.scrollHeight,
+        behavior: 'smooth'
+      });
+    }
+  }, []);
+
+  useEffect(() => {
+    const handleScroll = () => {
+      if (scrollRef.current) {
+        const { scrollTop, scrollHeight, clientHeight } = scrollRef.current;
+        const isNearBottom = scrollHeight - scrollTop - clientHeight < 200;
+        setShowScrollButton(!isNearBottom);
+      }
+    };
+
+    const currentScrollRef = scrollRef.current;
+    if (currentScrollRef) {
+      currentScrollRef.addEventListener('scroll', handleScroll);
+    }
+    return () => {
+      if (currentScrollRef) {
+        currentScrollRef.removeEventListener('scroll', handleScroll);
+      }
+    };
+  }, []);
 
   return (
     <div className="flex-1 flex flex-col relative h-[100dvh] md:h-full overflow-hidden transition-colors duration-500">
@@ -181,6 +208,15 @@ export const ChatInterface: React.FC = () => {
             </div>
          )}
 
+         <div className="flex items-center px-2 py-1 bg-white/90 dark:bg-slate-900/80 border border-zinc-200 dark:border-slate-800 rounded-xl shadow-xl">
+            <OrbAvatar 
+              config={activeProject?.config.avatarConfig || DEFAULT_ORB_CONFIG} 
+              size={32} 
+              isSpeaking={isPlaying} 
+              interactive={true} 
+            />
+         </div>
+
          <button onClick={toggleTheme} className="flex items-center justify-center p-2.5 bg-white/90 dark:bg-slate-900/80 border border-zinc-200 dark:border-slate-800 rounded-xl transition-all shadow-xl group">
            {theme === 'dark' ? (
              <svg className="w-4 h-4 sm:w-5 sm:h-5 text-amber-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364-6.364l-.707.707M6.343 17.657l-.707.707m12.728 0l-.707-.707M6.343 6.343l-.707-.707M12 8a4 4 0 100 8 4 4 0 000-8z" /></svg>
@@ -199,7 +235,12 @@ export const ChatInterface: React.FC = () => {
         <div className="max-w-4xl mx-auto w-full flex flex-col gap-4 sm:gap-6">
           {messages.length === 0 ? (
             <div className="flex flex-col items-center justify-center py-12 sm:py-20 text-center animate-in fade-in duration-1000">
-              <h2 className={`text-2xl sm:text-3xl font-black italic uppercase tracking-tighter ${theme === 'dark' ? 'text-white' : 'text-slate-900'}`}>{activeProject.name}</h2>
+              <OrbAvatar 
+                config={activeProject?.config.avatarConfig || DEFAULT_ORB_CONFIG} 
+                size={120} 
+                interactive={true} 
+              />
+              <h2 className={`mt-6 text-2xl sm:text-3xl font-black italic uppercase tracking-tighter ${theme === 'dark' ? 'text-white' : 'text-slate-900'}`}>{activeProject.name}</h2>
               <p className="opacity-80 font-mono text-[9px] sm:text-[10px] uppercase tracking-[0.4em] font-black" style={{ color: projectColor }}>{activeProject.config.role}</p>
             </div>
           ) : (
@@ -219,10 +260,21 @@ export const ChatInterface: React.FC = () => {
                   </div>
                 </div>
               )}
+              <div className="h-40 flex-shrink-0"></div>
             </>
           )}
         </div>
       </div>
+
+      {showScrollButton && (
+        <button 
+          onClick={scrollToBottom}
+          className="fixed bottom-32 right-6 sm:bottom-40 sm:right-10 z-[100] p-3 bg-white dark:bg-slate-900 border border-zinc-200 dark:border-slate-800 rounded-full shadow-2xl text-indigo-500 hover:scale-110 active:scale-95 transition-all animate-in fade-in zoom-in duration-300"
+          title="Scroll to Bottom"
+        >
+          <ChevronDown size={20} strokeWidth={3} />
+        </button>
+      )}
 
       {activeBranch && (
         <div className={`fixed sm:absolute bottom-0 left-0 right-0 p-3 sm:p-6 md:p-10 ${theme === 'dark' ? 'bg-gradient-to-t from-slate-950 via-slate-950/95' : 'bg-gradient-to-t from-gray-50 via-gray-50/95'} to-transparent pt-8 sm:pt-16 pointer-events-none z-30`}>

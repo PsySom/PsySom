@@ -4,6 +4,8 @@ import { useProjects } from '../../contexts/ProjectContext';
 import { useChat } from '../../hooks/useChat';
 import { MessageBubble } from './MessageBubble';
 import { LoadingSpinner } from '../ui/LoadingSpinner';
+import { OrbAvatar, DEFAULT_ORB_CONFIG } from '../ui/OrbAvatar';
+import { X } from 'lucide-react';
 
 interface VoiceOverlayProps {
   isOpen: boolean;
@@ -12,9 +14,10 @@ interface VoiceOverlayProps {
 }
 
 export const VoiceOverlay: React.FC<VoiceOverlayProps> = ({ isOpen, onClose, projectName }) => {
-  const { activeBranch } = useProjects();
+  const { activeBranch, activeProject } = useProjects();
   const { startVoiceLink, stopVoiceLink, isVoiceLinking, isAiSpeaking, error: voiceError } = useChat();
   const connectionAttempted = useRef(false);
+  const scrollRef = useRef<HTMLDivElement>(null);
   
   useEffect(() => {
     if (!connectionAttempted.current) {
@@ -28,19 +31,59 @@ export const VoiceOverlay: React.FC<VoiceOverlayProps> = ({ isOpen, onClose, pro
     };
   }, []);
 
-  const recentMessages = useMemo(() => {
+  // Auto-scroll transcript
+  useEffect(() => {
+    if (scrollRef.current) {
+      scrollRef.current.scrollTo({
+        top: scrollRef.current.scrollHeight,
+        behavior: 'smooth'
+      });
+    }
+  }, [activeBranch?.messages]);
+
+  const messages = useMemo(() => {
     if (!activeBranch || !activeBranch.messages) return [];
-    return activeBranch.messages.slice(-2);
+    return activeBranch.messages;
   }, [activeBranch?.messages]);
 
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-[500] flex items-center justify-center bg-zinc-950/95 backdrop-blur-2xl animate-in fade-in duration-300">
-      <div className="max-w-2xl w-full flex flex-col items-center gap-10 text-center p-8">
+    <div className="fixed inset-0 z-[500] flex flex-col md:flex-row bg-zinc-950 animate-in fade-in duration-500 overflow-hidden">
+      {/* LEFT: Transcript Sector (66% on Desktop) */}
+      <div className="flex-1 md:flex-[2] flex flex-col min-h-0 relative order-2 md:order-1 border-t md:border-t-0 md:border-r border-zinc-900 bg-zinc-950/50">
+        <div className="p-4 sm:p-6 border-b border-zinc-900 flex items-center justify-between">
+          <div className="flex items-center gap-3">
+             <div className="w-1 h-4 bg-indigo-500 rounded-full"></div>
+             <h2 className="text-[10px] font-black text-zinc-400 uppercase tracking-[0.3em] font-mono">Neural Transcript</h2>
+          </div>
+          <div className="md:hidden">
+             <button onClick={onClose} className="p-2 text-zinc-500 hover:text-white"><X size={20}/></button>
+          </div>
+        </div>
         
-        <div className="space-y-2">
-          <div className="inline-flex items-center gap-2 px-3 py-1 bg-zinc-900 border border-zinc-800 rounded-full mb-2">
+        <div 
+          ref={scrollRef}
+          className="flex-1 overflow-y-auto p-4 sm:p-8 space-y-6 scrollbar-hide pb-24"
+        >
+          {messages.length > 0 ? (
+            messages.map((msg, idx) => (
+              <div key={msg.id} className={`transition-all duration-700 ${idx === messages.length - 1 ? 'opacity-100' : 'opacity-40 grayscale-[0.5] scale-[0.98]'}`}>
+                <MessageBubble message={msg} onDelete={() => {}} />
+              </div>
+            ))
+          ) : (
+            <div className="h-full flex flex-col items-center justify-center opacity-20">
+               <p className="text-zinc-500 text-[10px] font-mono uppercase tracking-[0.4em] animate-pulse">Establishing flow stream...</p>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* RIGHT: Neural Interface Sector (33% on Desktop) */}
+      <div className="w-full md:w-1/3 flex flex-col items-center justify-center p-8 gap-12 bg-zinc-950 order-1 md:order-2 shrink-0">
+        <div className="space-y-4 text-center">
+          <div className="inline-flex items-center gap-2 px-3 py-1.5 bg-zinc-900 border border-zinc-800 rounded-full">
             {!isVoiceLinking && !voiceError ? (
                <LoadingSpinner className="w-3 h-3" />
             ) : (
@@ -50,58 +93,29 @@ export const VoiceOverlay: React.FC<VoiceOverlayProps> = ({ isOpen, onClose, pro
               {voiceError ? "Neural Fault" : !isVoiceLinking ? "Handshaking" : "Link: Active"}
             </span>
           </div>
-          <h1 className="text-3xl font-black text-white italic uppercase tracking-tighter">{projectName}</h1>
+          <h1 className="text-3xl sm:text-4xl font-black text-white italic uppercase tracking-tighter">{projectName}</h1>
         </div>
 
-        <div className="relative w-48 h-48 flex items-center justify-center">
-           <div className={`absolute inset-0 border border-indigo-500/20 rounded-full transition-all duration-1000 ${isAiSpeaking ? 'scale-150 opacity-10 animate-ping' : 'scale-100 opacity-0'}`}></div>
-           <div className={`relative w-32 h-32 rounded-[3rem] flex items-center justify-center transition-all duration-500 ${isAiSpeaking ? 'bg-indigo-600 shadow-2xl scale-110' : 'bg-zinc-900 border border-zinc-800'}`}>
-              {isAiSpeaking ? (
-                <div className="flex gap-1.5 h-10 items-center">
-                  {[...Array(6)].map((_, i) => (
-                    <div 
-                      key={i} 
-                      className="w-1 bg-white/90 rounded-full animate-bounce" 
-                      style={{ 
-                        height: `${12 + Math.random() * 24}px`,
-                        animationDuration: `${0.6 + Math.random() * 0.4}s`,
-                        animationDelay: `${i * 0.1}s` 
-                      }}
-                    ></div>
-                  ))}
-                </div>
-              ) : (
-                <div className="w-4 h-4 bg-zinc-700 rounded-full animate-pulse"></div>
-              )}
-           </div>
+        <div className="relative group">
+           <div className="absolute -inset-16 bg-indigo-500/5 blur-[100px] rounded-full animate-pulse"></div>
+           <OrbAvatar 
+             config={activeProject?.config.avatarConfig || DEFAULT_ORB_CONFIG} 
+             size={window.innerWidth < 768 ? 180 : 280} 
+             isSpeaking={isAiSpeaking} 
+             interactive={true} 
+           />
         </div>
 
-        <div className="w-full max-w-lg min-h-[140px] flex flex-col gap-4 overflow-hidden pointer-events-none">
-          {recentMessages.length > 0 ? (
-            <div className="flex flex-col gap-4 animate-in slide-in-from-bottom-2">
-               {recentMessages.map((msg, idx) => (
-                 <div key={msg.id} className={`transition-all duration-500 ${idx === recentMessages.length - 1 ? 'opacity-100' : 'opacity-20 scale-95'}`}>
-                    <MessageBubble message={msg} />
-                 </div>
-               ))}
-            </div>
-          ) : (
-             <div className="flex flex-col items-center gap-3 py-12">
-                <p className="text-zinc-500 text-[10px] font-mono uppercase tracking-[0.3em] animate-pulse">Awaiting neural flow...</p>
-             </div>
-          )}
-        </div>
-
-        <div className="w-full flex flex-col gap-6 pt-4">
+        <div className="w-full max-w-xs flex flex-col gap-6">
            {voiceError && (
-             <div className="p-4 bg-red-500/10 border border-red-500/20 rounded-2xl">
-                <p className="text-red-400 text-[10px] font-mono uppercase tracking-widest">{voiceError}</p>
+             <div className="p-4 bg-red-500/10 border border-red-500/20 rounded-2xl text-center">
+                <p className="text-red-400 text-[10px] font-mono uppercase tracking-widest font-black">{voiceError}</p>
              </div>
            )}
            
            <button 
             onClick={onClose}
-            className="w-full py-5 bg-zinc-900 hover:bg-red-600/10 border border-zinc-800 hover:border-red-500/50 text-zinc-500 hover:text-red-500 rounded-[2rem] font-black text-[10px] uppercase tracking-[0.4em] transition-all"
+            className="w-full py-5 bg-zinc-900 hover:bg-zinc-800 border border-zinc-800 hover:border-red-500/30 text-zinc-400 hover:text-red-500 rounded-[2rem] font-black text-[10px] uppercase tracking-[0.4em] transition-all active:scale-[0.98] shadow-2xl"
           >
             Terminate Link
           </button>

@@ -2,7 +2,7 @@
 import React, { useState, memo } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { Check, CloudUpload, Sparkles, Cpu, Clapperboard, Globe, Trash2 } from 'lucide-react';
+import { Check, CloudUpload, Sparkles, Cpu, Clapperboard, Globe, Trash2, Copy } from 'lucide-react';
 import { Message } from '../../types';
 import { useTheme } from '../../contexts/ThemeContext';
 import { useProjects } from '../../contexts/ProjectContext';
@@ -25,6 +25,7 @@ const MessageBubbleComponent: React.FC<MessageBubbleProps> = ({
   const { play, stop, activeMessageId, isPlaying } = useTTS();
   const [isSaved, setIsSaved] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+  const [isCopied, setIsCopied] = useState(false);
   
   const isUser = message.role === 'user';
   const isSystem = message.role === 'system';
@@ -55,6 +56,17 @@ const MessageBubbleComponent: React.FC<MessageBubbleProps> = ({
       console.error("Manual message sync failed:", err);
     } finally {
       setIsSaving(false);
+    }
+  };
+
+  const handleCopy = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    try {
+      await navigator.clipboard.writeText(displayContent);
+      setIsCopied(true);
+      setTimeout(() => setIsCopied(false), 2000);
+    } catch (err) {
+      console.error("Failed to copy text:", err);
     }
   };
 
@@ -119,12 +131,14 @@ const MessageBubbleComponent: React.FC<MessageBubbleProps> = ({
     );
   }
 
-  if (!displayContent && !parsedMedia && !message.attachment && !message.base64Attachment) return null;
+  const isImageString = typeof message.base64Attachment === 'string' && message.base64Attachment.startsWith('data:image');
+
+  if (!displayContent && !parsedMedia && !message.attachment && !isImageString) return null;
 
   return (
     <div className={`flex w-full ${isUser ? 'justify-end' : 'justify-start'} animate-in fade-in slide-in-from-bottom-4 duration-500 group/msg`}>
       <div 
-        className={`relative max-w-[90%] md:max-w-[75%] px-4 py-3 sm:px-5 sm:py-4 rounded-[1.25rem] sm:rounded-[1.5rem] shadow-xl transition-all ${
+        className={`relative max-w-[92%] sm:max-w-[85%] md:max-w-[75%] px-4 py-3 sm:px-5 sm:py-4 rounded-2xl sm:rounded-3xl shadow-xl transition-all ${
           isUser 
             ? 'text-white rounded-tr-none shadow-black/10' 
             : `${theme === 'dark' ? 'bg-slate-900/90 border-slate-800/80 text-slate-200 shadow-black/40' : 'bg-white border-slate-200 text-slate-800 shadow-slate-200/40'} border rounded-tl-none backdrop-blur-md ${isResult ? 'border-teal-500/30' : ''}`
@@ -132,34 +146,33 @@ const MessageBubbleComponent: React.FC<MessageBubbleProps> = ({
         style={isUser ? { backgroundColor: projectColor } : {}}
       >
         {!isUser && (
-          <div className="flex items-center justify-between mb-2 sm:mb-3">
-             <div className="flex items-center gap-3 sm:gap-4">
-                <div className="flex items-center gap-1.5 sm:gap-2">
-                   <Sparkles size={10} className={`animate-pulse ${isResult ? 'text-teal-500' : ''} sm:w-3 sm:h-3`} style={!isResult ? { color: projectColor } : {}} />
-                   <div className="text-[9px] sm:text-[10px] font-black uppercase tracking-widest opacity-90" style={{ color: isResult ? '#14b8a6' : projectColor }}>
+          <div className="flex items-center justify-between mb-2">
+             <div className="flex items-center gap-2 sm:gap-4">
+                <div className="flex items-center gap-1.5">
+                   <Sparkles size={10} className={`animate-pulse ${isResult ? 'text-teal-500' : ''}`} style={!isResult ? { color: projectColor } : {}} />
+                   <div className="text-[9px] font-black uppercase tracking-widest opacity-90" style={{ color: isResult ? '#14b8a6' : projectColor }}>
                      {isResult ? 'Verified Intelligence' : 'Neural Core'}
                    </div>
                 </div>
 
                 {isResult && (
                    <div className="flex items-center gap-1.5 px-2 py-0.5 bg-teal-500/10 border border-teal-500/20 rounded-full animate-in fade-in slide-in-from-left-2">
-                      <Globe size={8} className="text-teal-500 animate-pulse sm:w-[10px] sm:h-[10px]" />
-                      <span className="text-[7px] sm:text-[8px] font-black uppercase tracking-[0.1em] text-teal-600 dark:text-teal-400">Web Search</span>
+                      <Globe size={8} className="text-teal-500 animate-pulse" />
+                      <span className="text-[7px] font-black uppercase tracking-[0.1em] text-teal-600 dark:text-teal-400">Web</span>
                    </div>
                 )}
              </div>
           </div>
         )}
         
-        {/* Render Base64 Vision Attachment if present */}
-        {message.base64Attachment && (
-          <div className="mb-3 sm:mb-4 rounded-lg sm:rounded-xl overflow-hidden border border-zinc-200 dark:border-zinc-800 shadow-lg bg-zinc-950/50">
+        {isImageString && (
+          <div className="mb-3 rounded-xl overflow-hidden border border-zinc-200 dark:border-zinc-800 shadow-lg bg-zinc-950/50">
              <img 
-               src={message.base64Attachment} 
+               src={message.base64Attachment as string} 
                alt="Vision Attachment" 
                className="w-full max-h-[250px] sm:max-h-[350px] object-cover" 
              />
-             <div className="px-2 py-1 sm:px-3 sm:py-1.5 bg-black/40 backdrop-blur-sm text-[7px] sm:text-[8px] font-black uppercase tracking-[0.2em] text-indigo-400 border-t border-white/5">
+             <div className="px-3 py-1.5 bg-black/40 backdrop-blur-sm text-[7px] font-black uppercase tracking-[0.2em] text-indigo-400 border-t border-white/5">
                 Neural Vision Input
              </div>
           </div>
@@ -172,21 +185,31 @@ const MessageBubbleComponent: React.FC<MessageBubbleProps> = ({
         {message.attachment && <MediaAttachment fileId={message.attachment.id} mimeType={message.attachment.mimeType} fileName={message.attachment.name} />}
         {parsedMedia && <MediaAttachment fileId={parsedMedia.id} mimeType={parsedMedia.type} fileName={parsedMedia.name || 'Generated Asset'} />}
 
-        <div className={`text-[8px] sm:text-[9px] mt-3 sm:mt-4 opacity-30 font-mono flex items-center gap-2 sm:gap-3 ${isUser ? 'justify-end' : 'justify-start'}`}>
+        <div className={`text-[8px] sm:text-[9px] mt-3 opacity-30 font-mono flex items-center gap-2 sm:gap-3 ${isUser ? 'justify-end' : 'justify-start'}`}>
           <div className="flex items-center gap-1.5 sm:gap-2">
             <span className="uppercase tracking-widest">{isUser ? 'Sovereign' : 'Neural'}</span>
             <span>•</span>
             <span>{new Date(message.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
           </div>
           
-          <div className="flex items-center gap-0.5 sm:gap-1">
+          <div className="flex items-center gap-1">
             {!isUser && (
               <button 
                 onClick={handleSaveToVault}
                 className={`p-1 rounded-lg transition-all hover:opacity-100 ${isSaved ? 'text-green-500 opacity-100' : 'hover:bg-zinc-100 dark:hover:bg-white/10 opacity-30'} ${isSaving ? 'animate-pulse' : ''}`}
                 title="Save to Vault"
               >
-                {isSaved ? <Check size={12} strokeWidth={3} className="sm:w-3.5 sm:h-3.5" /> : <CloudUpload size={12} strokeWidth={2.5} className="sm:w-3.5 sm:h-3.5" />}
+                {isSaved ? <Check size={12} strokeWidth={3} /> : <CloudUpload size={12} strokeWidth={2.5} />}
+              </button>
+            )}
+
+            {displayContent && (
+              <button
+                onClick={handleCopy}
+                className={`p-1 rounded-lg transition-all hover:opacity-100 ${isCopied ? 'text-green-500 opacity-100' : 'hover:bg-zinc-100 dark:hover:bg-white/10 opacity-30'}`}
+                title="Copy Message"
+              >
+                {isCopied ? <Check size={12} strokeWidth={3} /> : <Copy size={12} strokeWidth={2.5} />}
               </button>
             )}
             
@@ -200,7 +223,7 @@ const MessageBubbleComponent: React.FC<MessageBubbleProps> = ({
                 title={isMePlaying ? "Stop Reading" : "Read Aloud"}
               >
                 {isMePlaying ? (
-                  <div className="w-3 h-3 sm:w-4 sm:h-4 bg-indigo-500 rounded-sm animate-pulse" />
+                  <div className="w-3 h-3 bg-indigo-500 rounded-sm animate-pulse" />
                 ) : (
                   <svg className="w-3 h-3 sm:w-4 sm:h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" />
@@ -228,7 +251,7 @@ const MessageBubbleComponent: React.FC<MessageBubbleProps> = ({
         </div>
 
         <div 
-          className={`absolute top-0 ${isUser ? 'right-0 -mr-0.5' : 'left-0 -ml-0.5'} w-2.5 h-2.5 sm:w-3 sm:h-3 rotate-45 transition-colors duration-300`}
+          className={`absolute top-0 ${isUser ? 'right-0 -mr-0.5' : 'left-0 -ml-0.5'} w-2.5 h-2.5 rotate-45 transition-colors duration-300`}
           style={isUser ? { backgroundColor: projectColor } : { backgroundColor: theme === 'dark' ? (isResult ? '#0d2d2a' : '#1e293b') : '#e2e8f0' }}
         ></div>
       </div>

@@ -2,6 +2,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { DriveService } from '../../lib/drive/driveService';
 import { DriveItem } from '../../types';
+import { Folder, File, FileCode, FileText, Image, ArrowLeft, ChevronRight } from 'lucide-react';
 
 interface FolderBrowserProps {
   onSelect: (folderId: string, folderName: string) => void;
@@ -70,31 +71,15 @@ export const FolderBrowser: React.FC<FolderBrowserProps> = ({ onSelect, initialF
 
   const getFileIcon = (mimeType: string) => {
     if (mimeType === 'application/vnd.google-apps.folder') {
-      return (
-        <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 7h6l2 2h10a2 2 0 012 2v8a2 2 0 01-2 2H3a2 2 0 01-2-2V9a2 2 0 012-2z" />
-        </svg>
-      );
+      return <Folder size={20} />;
     }
     if (mimeType.startsWith('image/')) {
-      return (
-        <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
-        </svg>
-      );
+      return <Image size={20} />;
     }
     if (mimeType === 'application/json' || mimeType.includes('javascript') || mimeType.includes('typescript')) {
-      return (
-        <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4" />
-        </svg>
-      );
+      return <FileCode size={20} />;
     }
-    return (
-      <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z" />
-      </svg>
-    );
+    return <FileText size={20} />;
   };
 
   const currentFolderName = path[path.length - 1]?.name || 'Unknown';
@@ -107,9 +92,7 @@ export const FolderBrowser: React.FC<FolderBrowserProps> = ({ onSelect, initialF
           disabled={path.length <= 1}
           className="p-1 text-zinc-500 hover:text-white disabled:opacity-20 transition-colors mr-2"
         >
-          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 19l-7-7m0 0l7-7m-7 7h18" />
-          </svg>
+          <ArrowLeft size={16} />
         </button>
         {path.map((p, idx) => (
           <React.Fragment key={p.id}>
@@ -135,9 +118,7 @@ export const FolderBrowser: React.FC<FolderBrowserProps> = ({ onSelect, initialF
           </div>
         ) : items.length === 0 ? (
           <div className="h-full flex flex-col items-center justify-center py-12 text-center opacity-40">
-             <svg className="w-12 h-12 mb-4 text-zinc-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1} d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
-             </svg>
+             <Folder size={48} className="mb-4 text-zinc-600" />
              <p className="text-zinc-500 text-xs italic">Empty workspace sector.</p>
           </div>
         ) : (
@@ -158,9 +139,7 @@ export const FolderBrowser: React.FC<FolderBrowserProps> = ({ onSelect, initialF
                   <p className="text-[9px] font-mono text-zinc-600 uppercase tracking-tighter group-hover:text-zinc-400">{item.mimeType.split('/').pop()} • {item.id.substring(0, 8)}</p>
                 </div>
                 {isFolder && (
-                  <svg className="w-4 h-4 text-zinc-800 opacity-0 group-hover:opacity-100 translate-x-2 group-hover:translate-x-0 transition-all" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-                  </svg>
+                  <ChevronRight size={16} className="text-zinc-800 opacity-0 group-hover:opacity-100 translate-x-2 group-hover:translate-x-0 transition-all" />
                 )}
               </button>
             );

@@ -1,3 +1,4 @@
+
 export type MessageType = 'idea' | 'process' | 'result' | 'discussion' | 'system';
 
 export interface Message {
@@ -27,11 +28,22 @@ export interface Branch {
   isDirty?: boolean;   // True if messages have changed since last Drive sync
 }
 
-export interface AvatarSettings {
-  color: string;
-  intensity: number;
-  speed: number;
-  scale: number;
+export interface AvatarConfig {
+  colors: {
+    primary: string;
+    secondary: string;
+    glow: string;
+    eyes: string;
+    particles: string;
+  };
+  settings: {
+    eyeSize: number;
+    eyeSpacing: number;
+    eyeHeight: number;
+    glowIntensity: number;
+    particleCount: number;
+    vibrationSpeed: number;
+  };
 }
 
 export interface ProjectConfig {
@@ -46,6 +58,7 @@ export interface ProjectConfig {
   videoModelId?: string;
   reasoningBudget?: number;
   systemInstruction?: string;
+  avatarConfig?: AvatarConfig;
 }
 
 export interface Project {

@@ -1,5 +1,5 @@
-
 import React, { useState } from 'react';
+import { createPortal } from 'react-dom';
 import { useProjects } from '../../contexts/ProjectContext';
 
 interface NewProjectModalProps {
@@ -44,14 +44,17 @@ export const NewProjectModal: React.FC<NewProjectModalProps> = ({ isOpen, onClos
     e.stopPropagation();
   };
 
-  return (
-    <div className="fixed inset-0 z-[100] flex items-center justify-center p-0 md:p-4">
+  return createPortal(
+    <div className="fixed inset-0 z-[10000] flex items-center justify-center p-0 md:p-4 overflow-hidden pointer-events-auto">
       <div 
-        className="absolute inset-0 bg-zinc-950/40 dark:bg-zinc-950/80 backdrop-blur-xl animate-in fade-in duration-300"
+        className="absolute inset-0 bg-zinc-950/60 dark:bg-zinc-950/80 backdrop-blur-xl animate-in fade-in duration-300"
         onClick={onClose}
       ></div>
 
-      <div className="relative w-full h-full md:h-auto md:max-h-[90vh] md:max-w-xl bg-white dark:bg-zinc-900 border-none md:border border-zinc-200 dark:border-zinc-800 rounded-none md:rounded-[2rem] shadow-2xl flex flex-col overflow-hidden animate-in fade-in zoom-in duration-300">
+      <div 
+        className="relative w-full h-full md:h-auto md:max-h-[90vh] md:max-w-xl bg-white dark:bg-zinc-900 border-none md:border border-zinc-200 dark:border-zinc-800 rounded-none md:rounded-[2rem] shadow-2xl flex flex-col overflow-hidden animate-in fade-in zoom-in duration-300"
+        onClick={(e) => e.stopPropagation()}
+      >
         <div className="p-5 sm:p-8 border-b border-zinc-100 dark:border-zinc-800/50 bg-zinc-50 dark:bg-zinc-900/50 flex items-center justify-between shrink-0">
           <div>
             <h2 className="text-xl sm:text-2xl font-black text-slate-900 dark:text-white tracking-tight">Initialize Workspace</h2>
@@ -157,6 +160,7 @@ export const NewProjectModal: React.FC<NewProjectModalProps> = ({ isOpen, onClos
           </div>
         </form>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 };

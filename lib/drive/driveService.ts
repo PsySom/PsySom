@@ -1,4 +1,3 @@
-
 // Global declaration for gapi and google to resolve TS errors
 declare global {
   interface AIStudio {
@@ -19,6 +18,7 @@ import { config } from '../../config';
 /**
  * DriveService: The Sovereign Neural Vault Interface.
  * Implements a strict Auth Circuit Breaker to prevent infinite 401 loops.
+ * Refactored for robust token recovery and fetch interception.
  */
 export class DriveService {
   private static instance: DriveService;
@@ -92,7 +92,11 @@ export class DriveService {
           this.tokenClient = window.google.accounts.oauth2.initTokenClient({
             client_id: config.googleClientId,
             scope: 'https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/drive.metadata.readonly https://www.googleapis.com/auth/userinfo.profile https://www.googleapis.com/auth/userinfo.email',
-            callback: '',
+            callback: (resp: any) => {
+              if (resp && !resp.error) {
+                window.gapi?.client?.setToken(resp);
+              }
+            },
           });
           this.gisInited = true;
         } else {
@@ -108,21 +112,22 @@ export class DriveService {
     return this.initPromise;
   }
 
+  /**
+   * getAccessToken: Requests a fresh token from GIS.
+   * Handles concurrent refresh requests via a promise queue to prevent multiple popups.
+   */
   public async getAccessToken(forcePrompt = false): Promise<any> {
     if (!this.gapiInited || !this.gisInited) {
       await this.initializeDrive();
     }
 
     if (this.isRefreshingToken) {
-      // Avoid multiple concurrent refresh prompts
-      return new Promise((resolve) => {
-        const check = setInterval(() => {
-          if (!this.isRefreshingToken) {
-            clearInterval(check);
-            resolve(window.gapi?.client?.getToken?.());
-          }
-        }, 100);
-      });
+      let attempts = 0;
+      while (this.isRefreshingToken && attempts < 50) {
+        await new Promise(r => setTimeout(r, 100));
+        attempts++;
+      }
+      return window.gapi?.client?.getToken?.();
     }
 
     return new Promise((resolve, reject) => {
@@ -139,10 +144,25 @@ export class DriveService {
         }
 
         this.isRefreshingToken = true;
+        
+        const timeout = setTimeout(() => {
+          if (this.isRefreshingToken) {
+            this.isRefreshingToken = false;
+            reject(new Error("SESSION_EXPIRED_USER_ACTION_REQUIRED"));
+          }
+        }, 60000); 
+
         this.tokenClient.callback = (resp: any) => {
+          clearTimeout(timeout);
           this.isRefreshingToken = false;
           if (resp.error) {
-            reject(new Error(resp.error_description || resp.error));
+            console.error("❌ Token Refresh Callback Error:", resp.error);
+            // If the popup was blocked or window.opener is missing due to COOP
+            if (resp.error === 'popup_closed_by_user' || resp.error === 'access_denied') {
+               reject(new Error("SESSION_EXPIRED_USER_ACTION_REQUIRED"));
+            } else {
+               reject(new Error(resp.error_description || resp.error));
+            }
           } else {
             window.gapi?.client?.setToken(resp);
             resolve(resp);
@@ -159,7 +179,7 @@ export class DriveService {
 
   /**
    * Centralized Drive API executor with surgical CIRCUIT BREAKER logic.
-   * Prevents infinite loops on 401/403.
+   * Intercepts 401/403 status codes and triggers a token refresh cycle.
    */
   public async callDriveApi<T>(operation: () => Promise<T>, retryCount = 0): Promise<T> {
     const MAX_RETRIES = 1;
@@ -173,25 +193,26 @@ export class DriveService {
     } catch (err: any) {
       const status = err.status || (err.result && err.result.error && err.result.error.code);
       
-      // Handle Auth Failures (401/403)
-      if ((status === 401 || status === 403)) {
+      if (status === 401 || status === 403) {
         if (retryCount < MAX_RETRIES) {
-          console.warn(`⚠️ Vault Access Expired (${status}). Refresh attempt ${retryCount + 1}...`);
+          console.warn(`⚠️ Vault Access Expired (${status}). Attempting Neural Re-link ${retryCount + 1}...`);
           try {
-            await this.getAccessToken(true);
-            return await this.callDriveApi(operation, retryCount + 1);
-          } catch (authErr) {
-            console.error("❌ Auth Refresh Failed. Terminal State Engaged.");
-            throw new Error("AUTH_DEAD");
+            const resp = await this.getAccessToken(true);
+            if (resp && resp.access_token) {
+              return await this.callDriveApi(operation, retryCount + 1);
+            }
+          } catch (authErr: any) {
+            console.error("❌ Auth Refresh Failed:", authErr.message);
+            window.dispatchEvent(new Event('google-auth-error'));
+            throw new Error("SESSION_EXPIRED_USER_ACTION_REQUIRED");
           }
         }
-        console.error("⛔ Vault Access Severed. Circuit Breaker activated.");
-        throw new Error("AUTH_DEAD");
+        console.error("⛔ Vault Access Severed. Retries exhausted.");
+        window.dispatchEvent(new Event('google-auth-error'));
+        throw new Error("SESSION_EXPIRED_USER_ACTION_REQUIRED");
       }
 
-      // Handle Rate Limits
       if (status === 429) {
-        console.error("⛔ Rate Limit Exceeded.");
         throw new Error("RATE_LIMIT_EXCEEDED");
       }
 
@@ -200,43 +221,47 @@ export class DriveService {
   }
 
   /**
-   * Robust fetch wrapper with authorization and strict One-Time Refresh policy.
+   * fetchWithAuth: Handles low-level fetch calls with automatic token recovery.
+   * Intercepts 401 Unauthorized responses to perform a blocking token refresh.
    */
   private async fetchWithAuth(url: string, options: RequestInit = {}, retryCount = 0): Promise<Response> {
     const MAX_RETRIES = 1;
     
     if (!this.gapiInited) await this.initializeDrive();
     
-    let token = window.gapi.client.getToken()?.access_token;
+    let token = window.gapi?.client?.getToken()?.access_token;
     if (!token) {
       const resp = await this.getAccessToken();
-      token = resp.access_token;
+      token = resp?.access_token;
     }
 
     const headers = new Headers(options.headers || {});
-    headers.set('Authorization', `Bearer ${token}`);
+    if (token) {
+      headers.set('Authorization', `Bearer ${token}`);
+    }
 
     const response = await fetch(url, { ...options, headers });
 
-    // Handle Auth Error (401)
     if (response.status === 401) {
       if (retryCount < MAX_RETRIES) {
-        console.warn(`⚠️ Vault Fetch Expired (401). Refresh attempt ${retryCount + 1}...`);
+        console.warn(`⚠️ Vault Fetch Expired (401). Attempting Neural Re-link ${retryCount + 1}...`);
         try {
-          await this.getAccessToken(true);
-          return this.fetchWithAuth(url, options, retryCount + 1);
-        } catch (e) {
-          console.error("❌ Fetch Refresh Failed. Terminal State Engaged.");
-          throw new Error("AUTH_DEAD");
+          const resp = await this.getAccessToken(true);
+          if (resp && resp.access_token) {
+             return this.fetchWithAuth(url, options, retryCount + 1);
+          }
+        } catch (e: any) {
+          console.error("❌ Fetch Refresh Failed:", e.message);
+          window.dispatchEvent(new Event('google-auth-error'));
+          throw new Error("SESSION_EXPIRED_USER_ACTION_REQUIRED");
         }
       }
-      console.error("⛔ Vault Fetch Severed. Circuit Breaker activated.");
-      throw new Error("AUTH_DEAD");
+      console.error("⛔ Vault Fetch Severed. Retries exhausted.");
+      window.dispatchEvent(new Event('google-auth-error'));
+      throw new Error("SESSION_EXPIRED_USER_ACTION_REQUIRED");
     }
 
-    // Handle Rate Limit or Forbidden
     if (response.status === 403 || response.status === 429) {
-       console.error(`⛔ Access Restricted (${response.status}).`);
        throw new Error("RATE_LIMIT_EXCEEDED");
     }
 

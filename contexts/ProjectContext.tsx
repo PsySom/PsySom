@@ -1,5 +1,6 @@
+
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
-import { Project, Branch, ProjectConfig, Message } from '../types';
+import { Project, Branch, ProjectConfig, Message, AvatarConfig } from '../types';
 import { DriveService } from '../lib/drive/driveService';
 import { useAuth } from './AuthContext';
 
@@ -25,6 +26,24 @@ interface ProjectContextType {
 
 const ProjectContext = createContext<ProjectContextType | undefined>(undefined);
 
+const DEFAULT_ORB: AvatarConfig = {
+  colors: {
+    primary: '#6366f1',
+    secondary: '#4338ca',
+    glow: 'rgba(99, 102, 241, 0.4)',
+    eyes: '#ffffff',
+    particles: '#a5b4fc',
+  },
+  settings: {
+    eyeSize: 4,
+    eyeSpacing: 12,
+    eyeHeight: 0,
+    glowIntensity: 40,
+    particleCount: 8,
+    vibrationSpeed: 50,
+  }
+};
+
 const DEFAULT_CONFIG = (folderId: string): ProjectConfig => ({
   role: 'Lead AI Architect',
   voice: 'Zephyr',
@@ -37,6 +56,7 @@ const DEFAULT_CONFIG = (folderId: string): ProjectConfig => ({
   videoModelId: 'veo-3.1-fast-generate-preview',
   reasoningBudget: 4096,
   systemInstruction: '',
+  avatarConfig: DEFAULT_ORB
 });
 
 export const ProjectProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {

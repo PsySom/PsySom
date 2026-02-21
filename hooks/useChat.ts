@@ -1,3 +1,4 @@
+
 import { useState, useCallback, useEffect, useRef } from 'react';
 import { Message, DriveItem } from '../types';
 import { GeminiService, GenerationOptions } from '../lib/ai/gemini';
@@ -11,6 +12,7 @@ import { checkNeuralAccess } from '../lib/config';
 
 /**
  * useChat Hook: The "Co-Reasoning" orchestrator for IdeaFlow 3.0.
+ * Refactored to support deep document analysis (PDF/DOCX/TXT) via multimodal payload.
  */
 export const useChat = () => {
   const { activeProject, activeBranch, saveBranch, updateLocalMessages, selectBranch } = useProjects();
@@ -57,7 +59,9 @@ export const useChat = () => {
         const files = await driveService.listContents(targetFolder);
         setFilesInContext(files);
       } catch (err: any) { 
-        if (err.message === 'AUTH_DEAD') setIsAuthBroken(true);
+        if (err.message === 'SESSION_EXPIRED_USER_ACTION_REQUIRED' || err.message === 'AUTH_DEAD') {
+          setIsAuthBroken(true);
+        }
         console.error("Context fetch failed:", err); 
       }
     }
@@ -122,7 +126,9 @@ export const useChat = () => {
       );
     } catch (err: any) {
       console.error("Voice Connection Failure:", err);
-      if (err.message === 'AUTH_DEAD') setIsAuthBroken(true);
+      if (err.message === 'SESSION_EXPIRED_USER_ACTION_REQUIRED' || err.message === 'AUTH_DEAD') {
+        setIsAuthBroken(true);
+      }
       setError(err.message || "Neural link disruption.");
       setIsVoiceLinking(false);
     }
@@ -138,58 +144,81 @@ export const useChat = () => {
       if (activeBranchRef.current) {
          setToolStatus("Vault Sync...");
          saveBranch(filtered).catch(e => {
-           if (e.message === 'AUTH_DEAD') setIsAuthBroken(true);
+           if (e.message === 'SESSION_EXPIRED_USER_ACTION_REQUIRED' || e.message === 'AUTH_DEAD') {
+             setIsAuthBroken(true);
+           }
          }).finally(() => setToolStatus(null));
       }
       return filtered;
     });
   }, [updateLocalMessages, saveBranch]);
 
-  /**
-   * deleteMessage: Removes a specific message from history and syncs with Drive.
-   */
   const deleteMessage = useCallback(async (messageId: string) => {
     if (!activeBranchRef.current) return;
     
     const currentMessages = activeBranchRef.current.messages || [];
     const filteredMessages = currentMessages.filter(m => m.id !== messageId);
     
-    // Optimistic local update
     updateLocalMessages(filteredMessages);
     
-    // Immediate background sync to Vault
     try {
       setToolStatus("Pruning Vault...");
       await saveBranch(filteredMessages);
     } catch (err: any) {
       console.error("Vault Deletion Sync Failed:", err);
-      if (err.message === 'AUTH_DEAD') setIsAuthBroken(true);
+      if (err.message === 'SESSION_EXPIRED_USER_ACTION_REQUIRED' || err.message === 'AUTH_DEAD') {
+        setIsAuthBroken(true);
+      }
       setError("Failed to sync message removal to cloud vault.");
     } finally {
       setToolStatus(null);
     }
   }, [updateLocalMessages, saveBranch]);
 
-  /**
-   * sendMessage: Simplified signature for vision integration as requested.
-   * Signature: (content: string, attachment?: string | null)
-   */
   const sendMessage = useCallback(async (
     content: string, 
-    attachment?: string | null
+    attachment?: string | Message['attachment'] | null,
+    uiOptions?: { isDeepThink?: boolean; isCreative?: boolean }
   ) => {
     if (!activeProject || !activeBranch || (!content.trim() && !attachment)) return;
     setError(null);
     setIsLoading(true);
     setToolStatus("Reasoning...");
     
+    const isBase64 = typeof attachment === 'string';
+    const isDriveFile = typeof attachment === 'object' && attachment !== null;
+
+    let finalBase64 = isBase64 ? (attachment as string) : undefined;
+
+    // Multimodal Neural Ingestion Logic: PDF/DOCX/TXT/IMAGE Support
+    if (isDriveFile) {
+      const driveItem = attachment as Message['attachment'];
+      const supportedMimeTypes = [
+        'application/pdf',
+        'text/plain',
+        'text/markdown',
+        'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+      ];
+      
+      if (driveItem.mimeType.startsWith('image/') || supportedMimeTypes.includes(driveItem.mimeType)) {
+        try {
+          setToolStatus("Ingesting File Data...");
+          const { data, mimeType } = await DriveService.getInstance().downloadFileAsBase64(driveItem.id);
+          finalBase64 = `data:${mimeType};base64,${data}`;
+        } catch (e) {
+          console.warn("Neural Os: Auto-ingestion protocol failed. Falling back to Tool-based reading.", e);
+        }
+      }
+    }
+
     const userMessage: Message = {
       id: `u-${Date.now()}`,
       role: 'user',
       content: content.trim(),
       timestamp: Date.now(),
       type: 'discussion',
-      base64Attachment: attachment || undefined
+      base64Attachment: finalBase64,
+      attachment: isDriveFile ? (attachment as Message['attachment']) : undefined
     };
 
     updateLocalMessages(prev => [...prev, userMessage]);
@@ -201,10 +230,13 @@ export const useChat = () => {
       let loopCount = 0;
       const MAX_LOOPS = 6; 
 
-      // Deep Think logic based on prompt keywords or state
-      const isDeepThink = content.toLowerCase().includes('search') || content.toLowerCase().includes('verify');
+      // Support explicit UI options OR keyword triggers
+      const isDeepThink = uiOptions?.isDeepThink || content.toLowerCase().includes('search') || content.toLowerCase().includes('verify');
+      const isCreative = uiOptions?.isCreative || content.toLowerCase().includes('generate image') || content.toLowerCase().includes('create video');
+
       const options: GenerationOptions = {
         isDeepThink,
+        isCreative,
         modelId: activeProject.config.logicModelId,
         reasoningBudget: activeProject.config.reasoningBudget,
         onRetry: (m: string) => setToolStatus(m)
@@ -267,7 +299,9 @@ export const useChat = () => {
                   currentMessagesForAI.push({ role: 'assistant', content: `[SYSTEM_TOOL_RESULT: ${toolResponse}]` } as Message);
                   assistantText += `\n\n${toolResponse}`;
                 } catch (mediaErr: any) {
-                  if (mediaErr.message === 'AUTH_DEAD') setIsAuthBroken(true);
+                  if (mediaErr.message === 'SESSION_EXPIRED_USER_ACTION_REQUIRED' || mediaErr.message === 'AUTH_DEAD') {
+                    setIsAuthBroken(true);
+                  }
                   setError("Neural synthesis disruption.");
                   currentMessagesForAI.push({ role: 'assistant', content: `[SYSTEM_TOOL_ERROR: Synthesis failed]` } as Message);
                 } finally {
@@ -292,7 +326,9 @@ export const useChat = () => {
               currentMessagesForAI.push({ role: 'assistant', content: `[SYSTEM_TOOL_RESULT: ${resultStr}]` } as Message);
             }
           } catch (toolErr: any) {
-            if (toolErr.message === 'AUTH_DEAD') setIsAuthBroken(true);
+            if (toolErr.message === 'SESSION_EXPIRED_USER_ACTION_REQUIRED' || toolErr.message === 'AUTH_DEAD') {
+              setIsAuthBroken(true);
+            }
             currentMessagesForAI.push({ role: 'assistant', content: `[SYSTEM_TOOL_ERROR: Execution failed]` } as Message);
           }
         }
@@ -312,7 +348,9 @@ export const useChat = () => {
         updateLocalMessages(prev => [...prev, assistantMessage]);
       }
     } catch (err: any) {
-      if (err.message === 'AUTH_DEAD') setIsAuthBroken(true);
+      if (err.message === 'SESSION_EXPIRED_USER_ACTION_REQUIRED' || err.message === 'AUTH_DEAD') {
+        setIsAuthBroken(true);
+      }
       setError(err.message || "NEURAL_DISRUPTION");
     } finally {
       setIsLoading(false);

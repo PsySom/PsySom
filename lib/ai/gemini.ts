@@ -1,3 +1,4 @@
+
 import { GoogleGenAI, GenerateContentResponse, Content, Part } from "@google/genai";
 import { driveTools } from "./tools";
 
@@ -10,7 +11,7 @@ export interface GenerationOptions {
 }
 
 const MAX_HISTORY_MESSAGES = 40;
-const PRUNE_MEDIA_THRESHOLD = 10; 
+const PRUNE_MEDIA_THRESHOLD = 8; // Prune heavy media from history earlier to save bandwidth
 
 /**
  * Standard models as per system instructions.
@@ -65,19 +66,25 @@ export class GeminiService {
 [OPERATING SYSTEM MODE: KERNEL v3.0]
 You are the kernel of IdeaFlow 3.0. Control project's private neural vault.
 
-[VISION_PROTOCOL]
-If an image part is provided in the current turn's contents, analyze it as primary context for the text prompt.
+[MULTIMODAL_PROTOCOL]
+Analyze all parts provided. You can process images, PDFs, and text documents.
+If an attachment is present, consider it primary context.
 
 [CRITICAL: AMBIGUOUS FILE PROTOCOL]
 If user asks to OPEN a .json file, ASK: 'Switch to this branch or analyze it here?'.
 
 [STANDARD FILE PROTOCOLS]
-1. TEXT FILES (PDF, MD, TXT, DOCX, CODE): Call 'read_file'.
+1. TEXT FILES (PDF, MD, TXT, DOCX, CODE): Call 'read_file' if not already in context.
 2. MEDIA GENERATION: SILENT EXECUTION.
 
 ${options?.isDeepThink ? `
 [PROTOCOL: DEEP_THINK_ACTIVE]
 Use Google Search Grounding. Verify facts. Listing sources is mandatory.
+` : ''}
+
+${options?.isCreative ? `
+[PROTOCOL: CREATIVE_MODE_ACTIVE]
+You are currently in Creative Mode. You have authorization to use the 'generate_media' tool to synthesize high-quality images or videos based on user descriptions or referenced assets.
 ` : ''}
       `;
 
@@ -126,26 +133,25 @@ Use Google Search Grounding. Verify facts. Listing sources is mandatory.
     }, 3, options?.onRetry);
   }
 
-  static formatHistory(history: { role: string; content: string; base64Attachment?: string }[]): Content[] {
+  static formatHistory(history: { role: string; content: string; base64Attachment?: any }[]): Content[] {
     const windowedHistory = history.slice(-MAX_HISTORY_MESSAGES);
     return windowedHistory.map((msg, index) => {
       let prunedContent = msg.content;
-      if (windowedHistory.length - index > PRUNE_MEDIA_THRESHOLD) {
+      const isOldMessage = (windowedHistory.length - index) > PRUNE_MEDIA_THRESHOLD;
+
+      if (isOldMessage) {
         const base64Regex = /data:[^;]+;base64,[A-Za-z0-9+/=]+/g;
         prunedContent = prunedContent.replace(base64Regex, "[ASSET_DATA_PRUNED]");
       }
 
       const parts: Part[] = [{ text: prunedContent }];
 
-      // Construction of Multimodal Parts
-      if (msg.base64Attachment && msg.base64Attachment.includes('base64,')) {
+      // Multimodal Part Construction - Supports PDF, Images, and Text
+      if (!isOldMessage && typeof msg.base64Attachment === 'string' && msg.base64Attachment.includes('base64,')) {
         try {
-          // 1. Extract pure Base64
-          // 2. Determine MIME type
           const [meta, data] = msg.base64Attachment.split(',');
           const mimeType = meta.split(':')[1].split(';')[0];
           
-          // 3. Append inlineData part
           parts.push({
             inlineData: {
               mimeType: mimeType,
@@ -153,7 +159,7 @@ Use Google Search Grounding. Verify facts. Listing sources is mandatory.
             }
           });
         } catch (e) {
-          console.error("Neural Vision Protocol Error: Failed to parse attachment", e);
+          console.error("Neural Multimodal Protocol Error: Failed to parse attachment payload", e);
         }
       }
 

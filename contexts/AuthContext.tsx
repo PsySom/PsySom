@@ -1,4 +1,3 @@
-
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import { UserProfile, AuthState } from '../types';
 import { DriveService } from '../lib/drive/driveService';
@@ -58,10 +57,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setIsLoading(true);
     setError(null);
     try {
-      // 1. LIGHTWEIGHT LOGIN: GIS only, no GAPI init with API key.
       const user = await driveService.loginUser(config.googleClientId);
       
-      // 2. Extract token from client state (set by driveService.loginUser internally)
       let accessToken = null;
       if (typeof window.gapi !== 'undefined' && window.gapi?.client?.getToken) {
         const tokenResponse = window.gapi.client.getToken();
@@ -79,8 +76,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       
     } catch (err: any) {
       console.error("AuthContext: Login failed", err);
-      if (err.message === "AUTH_DEAD") {
-        setError("Neural Link Severed. Please re-authenticate with Google Drive.");
+      if (err.message === "SESSION_EXPIRED_USER_ACTION_REQUIRED" || err.message === "AUTH_DEAD") {
+        setError("Neural Link Severed. Please re-authenticate with Google Drive to resume vault synchronization.");
       } else {
         setError(err.message || "Failed to authenticate with Google.");
       }
